@@ -46,3 +46,10 @@ def set_alert_settings(channel_id: int, role_id: Optional[int] = None) -> None:
 
 def set_alert_channel_id(channel_id: int) -> None:
     set_alert_settings(channel_id)
+
+
+def clear_alert_settings() -> None:
+    settings = load_settings()
+    settings.pop("discord_channel_id", None)
+    settings.pop("discord_role_id", None)
+    save_settings(settings)

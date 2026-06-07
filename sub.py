@@ -5,7 +5,7 @@ import random
 import discord
 from discord.ext import commands
 
-from bot_settings import set_alert_settings
+from bot_settings import clear_alert_settings, get_alert_channel_id, get_alert_role_id, set_alert_settings
 
 
 intents = discord.Intents.default()
@@ -22,7 +22,41 @@ async def on_ready():
 
 @bot.group(name="클컴봇", invoke_without_command=True)
 async def cloud_bot(ctx: commands.Context):
-    await ctx.reply("사용법: `!클컴봇 설정 [@역할]`")
+    await send_help(ctx)
+
+
+async def send_help(ctx: commands.Context):
+    embed = discord.Embed(
+        title="클컴봇 도움",
+        description="클라우드컴퓨팅 질의 알림 봇 명령어입니다.",
+        color=0x1ABC9C,
+    )
+    embed.add_field(
+        name="!클컴봇 설정 [@역할]",
+        value="현재 채널을 알림 채널로 설정합니다. 역할은 선택 사항입니다.",
+        inline=False,
+    )
+    embed.add_field(
+        name="!클컴봇 상태",
+        value="현재 알림 채널과 멘션 역할 설정을 확인합니다.",
+        inline=False,
+    )
+    embed.add_field(
+        name="!클컴봇 설정해제",
+        value="알림 채널과 역할 설정을 삭제합니다.",
+        inline=False,
+    )
+    embed.add_field(
+        name="!클컴봇 도움",
+        value="이 도움말을 보여줍니다.",
+        inline=False,
+    )
+    await ctx.reply(embed=embed)
+
+
+@cloud_bot.command(name="도움")
+async def help_command(ctx: commands.Context):
+    await send_help(ctx)
 
 
 @cloud_bot.command(name="설정")
@@ -36,6 +70,35 @@ async def setup(ctx: commands.Context, role: discord.Role = None):
         lines.append("멘션 역할: 없음")
 
     await ctx.reply("\n".join(lines))
+
+
+@cloud_bot.command(name="상태")
+async def status(ctx: commands.Context):
+    channel_id = get_alert_channel_id()
+    role_id = get_alert_role_id()
+
+    embed = discord.Embed(title="클컴봇 상태", color=0x1ABC9C)
+    if channel_id:
+        channel = bot.get_channel(channel_id)
+        channel_text = channel.mention if channel else f"`{channel_id}` (채널을 찾을 수 없음)"
+    else:
+        channel_text = "설정되지 않음"
+
+    if role_id:
+        role = ctx.guild.get_role(role_id) if ctx.guild else None
+        role_text = role.mention if role else f"`{role_id}` (역할을 찾을 수 없음)"
+    else:
+        role_text = "없음"
+
+    embed.add_field(name="알림 채널", value=channel_text, inline=False)
+    embed.add_field(name="멘션 역할", value=role_text, inline=False)
+    await ctx.reply(embed=embed)
+
+
+@cloud_bot.command(name="설정해제")
+async def clear_setup(ctx: commands.Context):
+    clear_alert_settings()
+    await ctx.reply("알림 채널과 멘션 역할 설정을 삭제했습니다.")
 
 
 @bot.command(name="안녕")
