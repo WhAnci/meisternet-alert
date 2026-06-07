@@ -106,3 +106,5 @@ docker compose run --rm crawler
 `Discord 로그인 실패: DISCORD_TOKEN이 잘못되었거나 재발급이 필요합니다.`가 나오면 Discord Developer Portal에서 봇 토큰을 새로 발급해 `.env`의 `DISCORD_TOKEN`을 교체하세요.
 
 `알림 채널이 설정되지 않았습니다. Discord에서 !클컴봇 설정을 먼저 실행하세요.`가 나오면 `setup-bot`이 정상 로그인된 뒤 Discord 채널에서 `!클컴봇 설정`을 실행하면 됩니다. 설정 전까지 `crawler`는 주기적으로 대기합니다.
+
+Rocky Linux에서 `deb.debian.org:80` 접속 실패로 `chromium` 설치가 실패하면 최신 `Dockerfile`을 받은 뒤 다시 빌드하세요. 현재 Dockerfile은 Debian apt 저장소를 HTTPS와 IPv4로 사용하도록 설정되어 있습니다.
