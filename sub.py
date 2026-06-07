@@ -27,30 +27,50 @@ async def cloud_bot(ctx: commands.Context):
 
 async def send_help(ctx: commands.Context):
     embed = discord.Embed(
-        title="클컴봇 도움",
-        description="클라우드컴퓨팅 질의 알림 봇 명령어입니다.",
+        title="클컴봇 명령어",
+        description=(
+            "마이스터넷 클라우드컴퓨팅 질의 알림을 설정하고 확인합니다.\n"
+            "처음 사용할 때는 알림을 받을 채널에서 `!클컴봇 설정`을 실행하세요."
+        ),
         color=0x1ABC9C,
     )
+    embed.set_author(name="클라우드컴퓨팅 질의 알림 봇")
     embed.add_field(
-        name="!클컴봇 설정 [@역할]",
-        value="현재 채널을 알림 채널로 설정합니다. 역할은 선택 사항입니다.",
+        name="설정",
+        value=(
+            "`!클컴봇 설정`\n"
+            "현재 채널을 알림 채널로 설정합니다.\n\n"
+            "`!클컴봇 설정 @역할`\n"
+            "알림 채널을 설정하고 새 질의 알림 때 역할을 멘션합니다."
+        ),
         inline=False,
     )
     embed.add_field(
-        name="!클컴봇 상태",
-        value="현재 알림 채널과 멘션 역할 설정을 확인합니다.",
-        inline=False,
+        name="관리",
+        value=(
+            "`!클컴봇 상태`\n"
+            "현재 알림 채널과 멘션 역할을 확인합니다.\n\n"
+            "`!클컴봇 설정해제`\n"
+            "알림 채널과 역할 설정을 삭제합니다."
+        ),
+        inline=True,
     )
     embed.add_field(
-        name="!클컴봇 설정해제",
-        value="알림 채널과 역할 설정을 삭제합니다.",
-        inline=False,
+        name="도움",
+        value=(
+            "`!클컴봇`\n"
+            "도움말을 보여줍니다.\n\n"
+            "`!클컴봇 도움`\n"
+            "도움말을 보여줍니다."
+        ),
+        inline=True,
     )
     embed.add_field(
-        name="!클컴봇 도움",
-        value="이 도움말을 보여줍니다.",
+        name="알림 내용",
+        value="새 질의 내용, 상세 링크, ZIP 첨부 링크가 있으면 함께 전송합니다.",
         inline=False,
     )
+    embed.set_footer(text="명령어가 반응하지 않으면 Discord Developer Portal에서 Message Content Intent를 켜주세요.")
     await ctx.reply(embed=embed)
 
 
