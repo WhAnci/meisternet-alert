@@ -5,7 +5,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urljoin
 
 import discord
@@ -333,11 +333,21 @@ def find_increases(
     return increases
 
 
+def collect_zip_links_from_element(element) -> List[str]:
+    links: List[str] = []
+    for anchor in element.find_elements(By.TAG_NAME, "a"):
+        href = anchor.get_attribute("href") or ""
+        text = anchor.get_attribute("innerText") or ""
+        if ".zip" in href.lower() or ".zip" in text.lower():
+            links.append(urljoin(BASE_URL, href))
+    return links
+
+
 def read_new_comments(
     driver: webdriver.Chrome, wait: WebDriverWait, row: QuestionRow, old_count: int
-) -> str:
+) -> Tuple[str, List[str]]:
     if not row.detail_url:
-        return "상세 질의 링크를 찾지 못했습니다. 마이스터넷에서 직접 확인해주세요."
+        return "상세 질의 링크를 찾지 못했습니다. 마이스터넷에서 직접 확인해주세요.", []
 
     driver.get(row.detail_url)
     try:
@@ -345,25 +355,34 @@ def read_new_comments(
             EC.presence_of_all_elements_located((By.CLASS_NAME, "comm_view"))
         )
     except TimeoutException:
-        return "상세 페이지에서 질의 내용을 찾지 못했습니다. 마이스터넷에서 직접 확인해주세요."
+        return "상세 페이지에서 질의 내용을 찾지 못했습니다. 마이스터넷에서 직접 확인해주세요.", []
 
     start = max(old_count, 0)
     end = min(row.count, len(comments))
     if start < end:
-        new_comments = [
-            comment.text.strip()
-            for comment in comments[start:end]
-            if comment.text.strip()
-        ]
+        new_comments: List[str] = []
+        zip_links: List[str] = []
+        seen_links: Set[str] = set()
+
+        for comment in comments[start:end]:
+            text = comment.text.strip()
+            if text:
+                new_comments.append(text)
+            for link in collect_zip_links_from_element(comment):
+                if link not in seen_links:
+                    zip_links.append(link)
+                    seen_links.add(link)
+
         if new_comments:
-            return "\n\n---\n\n".join(new_comments)
+            return "\n\n---\n\n".join(new_comments), zip_links
 
     if len(comments) >= row.count and row.count > 0:
-        latest = comments[row.count - 1].text.strip()
+        latest_comment = comments[row.count - 1]
+        latest = latest_comment.text.strip()
         if latest:
-            return latest
+            return latest, collect_zip_links_from_element(latest_comment)
 
-    return f"새 질의 내용을 찾지 못했습니다. 현재 표시된 질의 수: {len(comments)}"
+    return f"새 질의 내용을 찾지 못했습니다. 현재 표시된 질의 수: {len(comments)}", []
 
 
 def split_text_into_chunks(text: str, max_length: int) -> List[str]:
@@ -371,7 +390,14 @@ def split_text_into_chunks(text: str, max_length: int) -> List[str]:
 
 
 class OneTimeBot(discord.Client):
-    def __init__(self, config: Config, row: QuestionRow, old_count: int, comment: str):
+    def __init__(
+        self,
+        config: Config,
+        row: QuestionRow,
+        old_count: int,
+        comment: str,
+        zip_links: List[str],
+    ):
         intents = discord.Intents.default()
         intents.guilds = True
         super().__init__(intents=intents)
@@ -379,6 +405,7 @@ class OneTimeBot(discord.Client):
         self.row = row
         self.old_count = old_count
         self.comment = comment
+        self.zip_links = zip_links
 
     async def on_ready(self) -> None:
         print(f"봇 로그인: {self.user} ({self.user.id})")
@@ -405,6 +432,12 @@ class OneTimeBot(discord.Client):
 
         embed = discord.Embed(title=title, description=description, color=0x1ABC9C)
         embed.add_field(name="질의 내용 (1)", value=f"```{chunks[0]}```", inline=False)
+        if self.zip_links:
+            embed.add_field(
+                name="ZIP 첨부파일",
+                value="\n".join(self.zip_links[:10]),
+                inline=False,
+            )
         if self.row.detail_url:
             embed.add_field(name="상세 링크", value=self.row.detail_url, inline=False)
 
@@ -425,9 +458,13 @@ class OneTimeBot(discord.Client):
 
 
 async def send_discord_alert(
-    config: Config, row: QuestionRow, old_count: int, comment: str
+    config: Config,
+    row: QuestionRow,
+    old_count: int,
+    comment: str,
+    zip_links: List[str],
 ) -> None:
-    async with OneTimeBot(config, row, old_count, comment) as bot:
+    async with OneTimeBot(config, row, old_count, comment, zip_links) as bot:
         await bot.start(config.discord_token)
 
 
@@ -455,8 +492,10 @@ def check_once(config: Config, driver: webdriver.Chrome, wait: WebDriverWait) ->
 
     for row, old_count in increases:
         print(f"{row.title}의 값이 {old_count}에서 {row.count}로 증가했습니다.")
-        comment = read_new_comments(driver, wait, row, old_count)
-        asyncio.run(send_discord_alert(config, row, old_count, comment))
+        comment, zip_links = read_new_comments(driver, wait, row, old_count)
+        if zip_links:
+            print(f"ZIP 첨부파일 {len(zip_links)}개를 찾았습니다.")
+        asyncio.run(send_discord_alert(config, row, old_count, comment, zip_links))
 
     save_current_rows(current_rows)
 
