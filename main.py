@@ -9,7 +9,7 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urljoin
 
 import discord
-from bot_settings import get_alert_channel_id, get_alert_role_id
+from bot_settings import append_log, get_alert_channel_id, get_alert_role_id
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.edge.options import Options as EdgeOptions
@@ -475,6 +475,7 @@ def ensure_questions_page(
         select_job(driver, wait, config.job_name)
     except Exception:
         print("로그인 상태를 확인했습니다. 세션이 만료되었거나 접근이 막혀 재로그인합니다.")
+        append_log("세션 만료 또는 접근 실패 감지: 재로그인 시도")
         login(driver, wait, config)
         select_job(driver, wait, config.job_name)
 
@@ -487,15 +488,19 @@ def check_once(config: Config, driver: webdriver.Chrome, wait: WebDriverWait) ->
 
     if not previous_rows:
         print("기준 데이터가 없어 현재 데이터를 저장하고 종료합니다.")
+        append_log("기준 데이터 생성")
     elif not increases:
         print("값의 변화가 없습니다.")
 
     for row, old_count in increases:
         print(f"{row.title}의 값이 {old_count}에서 {row.count}로 증가했습니다.")
+        append_log(f"새 질의 감지: {row.title} ({old_count} -> {row.count})")
         comment, zip_links = read_new_comments(driver, wait, row, old_count)
         if zip_links:
             print(f"ZIP 첨부파일 {len(zip_links)}개를 찾았습니다.")
+            append_log(f"ZIP 첨부파일 감지: {len(zip_links)}개")
         asyncio.run(send_discord_alert(config, row, old_count, comment, zip_links))
+        append_log(f"Discord 알림 전송 완료: {row.region}")
 
     save_current_rows(current_rows)
 
@@ -515,12 +520,14 @@ def main() -> None:
             print(exc)
         except WebDriverException as exc:
             print(f"브라우저 오류가 발생해 다음 주기에 새 브라우저로 재시도합니다: {exc}")
+            append_log("브라우저 오류 발생: 다음 주기에 새 브라우저로 재시도")
             if driver:
                 driver.quit()
             driver = None
             wait = None
         except Exception as exc:
             print(f"실행 중 오류: {exc}")
+            append_log(f"실행 오류: {exc}")
 
         interval_seconds = int(os.getenv("CHECK_INTERVAL_SECONDS", "600"))
         if interval_seconds <= 0:

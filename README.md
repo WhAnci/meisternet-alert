@@ -85,6 +85,8 @@ Discord Developer Portal에서 봇의 **Message Content Intent**를 켜야 `!` �
 
 역할은 선택 사항입니다. 비워두면 역할 멘션 없이 알림만 전송합니다. 설정이 끝나면 `bot_settings.json`에 채널 ID와 역할 ID가 저장됩니다. 이후 `crawler` 서비스가 이 설정대로 질의 알림을 보냅니다.
 
+`!클컴봇` 계열 명령어는 Discord 서버 관리자만 사용할 수 있습니다. 관리자가 아니면 봇이 응답하지 않습니다.
+
 ## Discord 명령어
 
 ```text
@@ -99,6 +101,12 @@ Discord Developer Portal에서 봇의 **Message Content Intent**를 켜야 `!` �
 ```
 
 현재 알림 채널과 멘션 역할 설정을 보여줍니다.
+
+```text
+!클컴봇 최근로그
+```
+
+최근 봇 이벤트 로그를 보여줍니다.
 
 ```text
 !클컴봇 설정해제

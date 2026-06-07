@@ -10,6 +10,7 @@ services:
       SELENIUM_HEADLESS: "true"
       DATA_FILE: /data/data.csv
       BOT_SETTINGS_FILE: /data/bot_settings.json
+      BOT_LOG_FILE: /data/bot_events.log
     volumes:
       - bot-data:/data
     command: ["python", "sub.py"]
@@ -26,6 +27,7 @@ services:
       SELENIUM_HEADLESS: "true"
       DATA_FILE: /data/data.csv
       BOT_SETTINGS_FILE: /data/bot_settings.json
+      BOT_LOG_FILE: /data/bot_events.log
     volumes:
       - bot-data:/data
     command: ["python", "main.py"]

@@ -1,9 +1,11 @@
 import json
 import os
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 
 SETTINGS_FILE = os.getenv("BOT_SETTINGS_FILE", "bot_settings.json")
+LOG_FILE = os.getenv("BOT_LOG_FILE", "bot_events.log")
 
 
 def load_settings() -> Dict[str, Any]:
@@ -53,3 +55,18 @@ def clear_alert_settings() -> None:
     settings.pop("discord_channel_id", None)
     settings.pop("discord_role_id", None)
     save_settings(settings)
+
+
+def append_log(message: str) -> None:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(LOG_FILE, "a", encoding="utf-8") as file:
+        file.write(f"[{timestamp}] {message}\n")
+
+
+def read_recent_logs(limit: int = 10) -> list[str]:
+    if not os.path.exists(LOG_FILE):
+        return []
+
+    with open(LOG_FILE, encoding="utf-8") as file:
+        lines = [line.rstrip("\n") for line in file if line.strip()]
+    return lines[-limit:]

@@ -5,7 +5,14 @@ import random
 import discord
 from discord.ext import commands
 
-from bot_settings import clear_alert_settings, get_alert_channel_id, get_alert_role_id, set_alert_settings
+from bot_settings import (
+    append_log,
+    clear_alert_settings,
+    get_alert_channel_id,
+    get_alert_role_id,
+    read_recent_logs,
+    set_alert_settings,
+)
 
 
 intents = discord.Intents.default()
@@ -18,10 +25,17 @@ regions = ["광주", "충남", "전남", "대전", "서울", "충북"]
 @bot.event
 async def on_ready():
     print(f"봇 로그인: {bot.user} ({bot.user.id})")
+    append_log(f"설정 봇 로그인: {bot.user}")
+
+
+def is_admin(ctx: commands.Context) -> bool:
+    return bool(ctx.guild and ctx.author.guild_permissions.administrator)
 
 
 @bot.group(name="클컴봇", invoke_without_command=True)
 async def cloud_bot(ctx: commands.Context):
+    if not is_admin(ctx):
+        return
     await send_help(ctx)
 
 
@@ -50,6 +64,8 @@ async def send_help(ctx: commands.Context):
         value=(
             "`!클컴봇 상태`\n"
             "현재 알림 채널과 멘션 역할을 확인합니다.\n\n"
+            "`!클컴봇 최근로그`\n"
+            "최근 봇 이벤트 로그를 확인합니다.\n\n"
             "`!클컴봇 설정해제`\n"
             "알림 채널과 역할 설정을 삭제합니다."
         ),
@@ -76,12 +92,20 @@ async def send_help(ctx: commands.Context):
 
 @cloud_bot.command(name="도움")
 async def help_command(ctx: commands.Context):
+    if not is_admin(ctx):
+        return
     await send_help(ctx)
 
 
 @cloud_bot.command(name="설정")
 async def setup(ctx: commands.Context, role: discord.Role = None):
+    if not is_admin(ctx):
+        return
+
     set_alert_settings(ctx.channel.id, role.id if role else None)
+    append_log(
+        f"알림 설정 변경: channel={ctx.channel.id}, role={role.id if role else 'none'}, user={ctx.author}"
+    )
 
     lines = [f"알림 채널: {ctx.channel.mention}"]
     if role:
@@ -94,6 +118,9 @@ async def setup(ctx: commands.Context, role: discord.Role = None):
 
 @cloud_bot.command(name="상태")
 async def status(ctx: commands.Context):
+    if not is_admin(ctx):
+        return
+
     channel_id = get_alert_channel_id()
     role_id = get_alert_role_id()
 
@@ -117,8 +144,26 @@ async def status(ctx: commands.Context):
 
 @cloud_bot.command(name="설정해제")
 async def clear_setup(ctx: commands.Context):
+    if not is_admin(ctx):
+        return
+
     clear_alert_settings()
+    append_log(f"알림 설정 삭제: user={ctx.author}")
     await ctx.reply("알림 채널과 멘션 역할 설정을 삭제했습니다.")
+
+
+@cloud_bot.command(name="최근로그")
+async def recent_logs(ctx: commands.Context):
+    if not is_admin(ctx):
+        return
+
+    logs = read_recent_logs(10)
+    embed = discord.Embed(title="클컴봇 최근로그", color=0x1ABC9C)
+    if logs:
+        embed.description = "```text\n" + "\n".join(logs)[-3900:] + "\n```"
+    else:
+        embed.description = "아직 기록된 로그가 없습니다."
+    await ctx.reply(embed=embed)
 
 
 @bot.command(name="안녕")
