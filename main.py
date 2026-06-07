@@ -1,325 +1,496 @@
-afrom tabulate import tabulate
-from discord.ext import commands
-import re
-import os
-import csv
-import requests
-import discord
 import asyncio
-from datetime import datetime
-
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.chrome.options import Options
+import csv
+import os
+import re
 import time
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Dict, Iterable, List, Optional, Tuple
+from urllib.parse import urljoin
 
-chrome_driver_path = "./chromedriver-win64/chromedriver.exe"
-
-options = Options()
-# options.add_argument("--headless")  # 이 줄을 주석 처리하거나 삭제하세요
-
-service = Service(chrome_driver_path)
-driver = webdriver.Chrome(service=service, options=options)
-
-url = "https://meister.hrdkorea.or.kr/main/main.do"
-driver.get(url)
-
-# 마이스터넷 로그인 창
-element = driver.find_element(By.XPATH, "/html/body/div[2]/div[3]/div[1]/div/div/div[1]/ul/li[1]/a")
-element.click()
-
-# ID 입력
-id_input = driver.find_element(By.XPATH, "/html/body/div[2]/div[4]/div[3]/div[4]/div[2]/fieldset/div/form/dl[1]/dd/input")
-id_input.send_keys("UR_ID")
-
-# PW 입력
-pw_input = driver.find_element(By.XPATH, "/html/body/div[2]/div[4]/div[3]/div[4]/div[2]/fieldset/div/form/dl[2]/dd[1]/input")
-pw_input.send_keys("UR_PW")
-
-time.sleep(1)
-
-from selenium.webdriver.support.ui import WebDriverWait
+import discord
+from bot_settings import get_alert_channel_id, get_alert_role_id
+from selenium import webdriver
+from selenium.common.exceptions import TimeoutException, WebDriverException
+from selenium.webdriver.edge.options import Options as EdgeOptions
+from selenium.webdriver.edge.service import Service as EdgeService
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import Select, WebDriverWait
 
-#로그인 버튼 클릭
-login_button = WebDriverWait(driver, 10).until(
-    EC.element_to_be_clickable((By.CSS_SELECTOR, "#loginFrm > a"))
+
+BASE_URL = "https://meister.hrdkorea.or.kr"
+MAIN_URL = f"{BASE_URL}/main/main.do"
+QUESTIONS_URL = (
+    f"{BASE_URL}/sub/3/3/7/skillMatchTournament/taskQuestionsList.do"
 )
-driver.execute_script("arguments[0].scrollIntoView(true);", login_button)
-time.sleep(0.5)
-login_button.click()
+DATA_FILE = os.getenv("DATA_FILE", "data.csv")
+MAX_FIELD_LENGTH = 1024
 
-time.sleep(1)
-#2차인증 생년월일 입력
-extra_input = WebDriverWait(driver, 10).until(
-    EC.presence_of_element_located((By.XPATH, "/html/body/div[2]/div[4]/div[4]/div/div/div[2]/div[2]/div[1]/input"))
-)
-extra_input.send_keys("UR_PASSCODE")
 
-confirm_button = WebDriverWait(driver, 10).until(
-    EC.element_to_be_clickable((By.XPATH, '//*[@id="myModal"]/div/div/div[2]/div[2]/div[1]/button'))
-)
-confirm_button.click()
+class AlertChannelNotConfigured(RuntimeError):
+    pass
 
-time.sleep(1)
 
-driver.get("https://meister.hrdkorea.or.kr/sub/3/3/7/skillMatchTournament/taskQuestionsList.do")
+@dataclass(frozen=True)
+class Config:
+    meister_id: str
+    meister_password: str
+    meister_passcode: str
+    discord_token: str
+    discord_channel_id: int
+    discord_role_id: Optional[int]
+    discord_user_id: Optional[int]
+    job_name: str
+    interval_seconds: int
+    headless: bool
+    browser: str
+    chrome_driver_path: Optional[str]
+    chrome_binary_path: Optional[str]
 
-#직종 선택란 클릭
-select_element = WebDriverWait(driver, 10).until(
-    EC.presence_of_element_located((By.XPATH, "/html/body/div[2]/div[4]/div[3]/form/div[1]/div/select[2]"))
-)
-#IT네트워크시스템
-option = select_element.find_elements(By.TAG_NAME, "option")[51]
-option.click()
 
-#검색 버튼 클릭
-input_button = WebDriverWait(driver, 10).until(
-    EC.element_to_be_clickable((By.XPATH, "/html/body/div[2]/div[4]/div[3]/form/div[1]/div/div/input[2]"))
-)
-input_button.click()
+@dataclass(frozen=True)
+class QuestionRow:
+    region: str
+    count: int
+    title: str
+    detail_url: str
 
-result = []
 
-# 현재 페이지 데이터 긁기 함수
-def scrape_current_page():
-    rows = WebDriverWait(driver, 10).until(
+def required_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"{name} 환경변수가 필요합니다.")
+    return value
+
+
+def optional_int_env(name: str) -> Optional[int]:
+    value = os.getenv(name)
+    return int(value) if value else None
+
+
+def load_config() -> Config:
+    discord_channel_id = get_alert_channel_id()
+    if not discord_channel_id:
+        raise AlertChannelNotConfigured("알림 채널이 설정되지 않았습니다. Discord에서 !클컴봇 설정을 먼저 실행하세요.")
+
+    return Config(
+        meister_id=required_env("MEISTER_ID"),
+        meister_password=required_env("MEISTER_PASSWORD"),
+        meister_passcode=required_env("MEISTER_PASSCODE"),
+        discord_token=required_env("DISCORD_TOKEN"),
+        discord_channel_id=discord_channel_id,
+        discord_role_id=get_alert_role_id(),
+        discord_user_id=optional_int_env("DISCORD_USER_ID"),
+        job_name=os.getenv("MEISTER_JOB_NAME", "클라우드컴퓨팅"),
+        interval_seconds=int(os.getenv("CHECK_INTERVAL_SECONDS", "600")),
+        headless=os.getenv("SELENIUM_HEADLESS", "true").lower() != "false",
+        browser=os.getenv("BROWSER", "chrome").lower(),
+        chrome_driver_path=os.getenv("CHROME_DRIVER_PATH") or None,
+        chrome_binary_path=os.getenv("CHROME_BINARY_PATH") or None,
+    )
+
+
+def build_driver(config: Config) -> webdriver.Chrome:
+    if config.browser == "edge":
+        options = EdgeOptions()
+        if config.headless:
+            options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--window-size=1600,2000")
+        if config.chrome_binary_path:
+            options.binary_location = config.chrome_binary_path
+
+        service = (
+            EdgeService(config.chrome_driver_path)
+            if config.chrome_driver_path
+            else EdgeService()
+        )
+        return webdriver.Edge(service=service, options=options)
+
+    options = Options()
+    if config.headless:
+        options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1600,2000")
+    if config.chrome_binary_path:
+        options.binary_location = config.chrome_binary_path
+
+    service = (
+        Service(config.chrome_driver_path)
+        if config.chrome_driver_path
+        else Service()
+    )
+    return webdriver.Chrome(service=service, options=options)
+
+
+def safe_click(driver: webdriver.Chrome, element) -> None:
+    driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+    time.sleep(0.2)
+    driver.execute_script("arguments[0].click();", element)
+
+
+def login(driver: webdriver.Chrome, wait: WebDriverWait, config: Config) -> None:
+    driver.get(MAIN_URL)
+
+    safe_click(driver, wait.until(
+        EC.element_to_be_clickable(
+            (By.XPATH, "/html/body/div[2]/div[3]/div[1]/div/div/div[1]/ul/li[1]/a")
+        )
+    ))
+
+    wait.until(
+        EC.presence_of_element_located(
+            (
+                By.XPATH,
+                "/html/body/div[2]/div[4]/div[3]/div[4]/div[2]/fieldset/div/form/dl[1]/dd/input",
+            )
+        )
+    ).send_keys(config.meister_id)
+
+    wait.until(
+        EC.presence_of_element_located(
+            (
+                By.XPATH,
+                "/html/body/div[2]/div[4]/div[3]/div[4]/div[2]/fieldset/div/form/dl[2]/dd[1]/input",
+            )
+        )
+    ).send_keys(config.meister_password)
+
+    login_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "#loginFrm > a")))
+    safe_click(driver, login_button)
+
+    passcode_input = wait.until(
+        EC.presence_of_element_located(
+            (
+                By.XPATH,
+                "/html/body/div[2]/div[4]/div[4]/div/div/div[2]/div[2]/div[1]/input",
+            )
+        )
+    )
+    passcode_input.send_keys(config.meister_passcode)
+
+    safe_click(driver, wait.until(
+        EC.element_to_be_clickable(
+            (By.XPATH, '//*[@id="myModal"]/div/div/div[2]/div[2]/div[1]/button')
+        )
+    ))
+
+
+def select_job(driver: webdriver.Chrome, wait: WebDriverWait, job_name: str) -> None:
+    driver.get(QUESTIONS_URL)
+
+    select_element = wait.until(
+        EC.presence_of_element_located(
+            (By.XPATH, "/html/body/div[2]/div[4]/div[3]/form/div[1]/div/select[2]")
+        )
+    )
+    select = Select(select_element)
+    option_texts = [option.text.strip() for option in select.options]
+    normalized_job_name = normalize_job_name(job_name)
+    matched = next(
+        (
+            text
+            for text in option_texts
+            if normalized_job_name in normalize_job_name(text)
+        ),
+        None,
+    )
+    if not matched:
+        choices = ", ".join(text for text in option_texts if text)[:1000]
+        raise RuntimeError(f"직종 '{job_name}'을 찾지 못했습니다. 선택 가능 항목: {choices}")
+
+    select.select_by_visible_text(matched)
+    safe_click(driver, wait.until(
+        EC.element_to_be_clickable(
+            (By.XPATH, "/html/body/div[2]/div[4]/div[3]/form/div[1]/div/div/input[2]")
+        )
+    ))
+
+
+def extract_count(title: str) -> int:
+    match = re.search(r"\[(\d+)\]", title)
+    return int(match.group(1)) if match else 0
+
+
+def extract_question_key(title: str) -> str:
+    return re.sub(r"\s*\[\d+\]\s*$", "", title).strip()
+
+
+def normalize_job_name(value: str) -> str:
+    return re.sub(r"\s+", "", value)
+
+
+def parse_question_rows(driver: webdriver.Chrome, wait: WebDriverWait) -> List[QuestionRow]:
+    parsed: List[QuestionRow] = []
+    rows = wait.until(
         EC.presence_of_all_elements_located(
             (By.XPATH, "/html/body/div[2]/div[4]/div[3]/form/div[1]/table/tbody/tr")
         )
     )
-    for i, row in enumerate(rows, start=1):
-        try:
-            tds = row.find_elements(By.TAG_NAME, "td")
-            if not tds:
-                continue
-            texts = [td.get_attribute("innerText").strip() for td in tds]
-            result.append(texts)
-        except StaleElementReferenceException:
-            print(f"Row {i} is stale. 건너뜀.")
 
-# 첫 페이지 긁기
-scrape_current_page()
+    for row in rows:
+        cells = row.find_elements(By.TAG_NAME, "td")
+        if len(cells) < 4:
+            continue
 
-# 페이지네이션 순회
-while True:
-    try:
+        title = cells[2].get_attribute("innerText").strip()
+        count = extract_count(title)
+        if not title or count <= 0:
+            continue
+
+        links = cells[2].find_elements(By.TAG_NAME, "a")
+        detail_url = ""
+        if links:
+            href = links[0].get_attribute("href") or ""
+            detail_url = urljoin(BASE_URL, href)
+
+        parsed.append(
+            QuestionRow(
+                region=extract_question_key(title),
+                count=count,
+                title=title,
+                detail_url=detail_url,
+            )
+        )
+
+    return parsed
+
+
+def scrape_all_rows(driver: webdriver.Chrome, wait: WebDriverWait) -> List[QuestionRow]:
+    result = parse_question_rows(driver, wait)
+
+    while True:
         paging_links = driver.find_elements(By.CSS_SELECTOR, "div.paging a")
-        active = driver.find_element(By.CSS_SELECTOR, "div.paging a.active")
-        current_page = int(active.text) if active.text.isdigit() else 1
+        try:
+            active = driver.find_element(By.CSS_SELECTOR, "div.paging a.active")
+            current_page = int(active.text) if active.text.isdigit() else 1
+        except Exception:
+            current_page = 1
 
         next_page = None
-        # 다음 번호 찾기
         for link in paging_links:
             if link.text.isdigit() and int(link.text) == current_page + 1:
                 next_page = link
                 break
 
-        # 없으면 "다음" 버튼
         if not next_page:
-            for link in paging_links:
-                if "다음" in link.text:
-                    next_page = link
-                    break
-
+            next_page = next((link for link in paging_links if "다음" in link.text), None)
         if not next_page:
-            print("마지막 페이지 도달")
             break
 
         driver.execute_script("arguments[0].click();", next_page)
-        time.sleep(2)
-        scrape_current_page()
+        time.sleep(1)
+        result.extend(parse_question_rows(driver, wait))
 
-    except Exception as e:
-        print("페이지 이동 실패:", e)
-        break
-
-time.sleep(3)
-driver.quit()
-
-print("#####")
-print(result)
-print("#####")
-
-# 데이터 후처리
-result = result[1:]  # 첫 번째 헤더 제거
-titles = [row[3] for row in result]
-regions = [row[2] for row in result]
-
-def extract_number(region):
-    match = re.search(r'\[(\d+)\]', region)
-    return int(match.group(1)) if match else 0
-
-region_numbers = [extract_number(title) for title in titles]
-
-csv_file = "data.csv"
-current_data = list(zip(regions, region_numbers))
-
-print(current_data)
+    return result
 
 
-# 이전 데이터 불러오기
-prev_data = []
-if os.path.exists(csv_file):
-    with open(csv_file, newline="", encoding="utf-8") as f:
-        reader = csv.reader(f)
-        next(reader)  # skip header
+def load_previous_rows() -> Dict[str, QuestionRow]:
+    if not os.path.exists(DATA_FILE):
+        return {}
+
+    previous: Dict[str, QuestionRow] = {}
+    with open(DATA_FILE, newline="", encoding="utf-8") as file:
+        reader = csv.DictReader(file)
         for row in reader:
-            prev_data.append((row[0], int(row[1])))
-
-# 값이 올라가 있는지 확인
-message_printed = False
-if prev_data:
-    for (region, prev_num), (_, curr_num) in zip(prev_data, current_data):
-        if curr_num > prev_num:
-            print(f"{region}의 값이 {prev_num}에서 {curr_num}로 증가했습니다.")
-
-            service = Service(chrome_driver_path)
-            driver = webdriver.Chrome(service=service, options=options)
-            driver.get(url)
-
-            # 마이스터넷 로그인 창
-            element = driver.find_element(By.XPATH, "/html/body/div[2]/div[3]/div[1]/div/div/div[1]/ul/li[1]/a")
-            element.click()
-
-            # ID 입력
-            id_input = driver.find_element(By.XPATH, "/html/body/div[2]/div[4]/div[3]/div[4]/div[2]/fieldset/div/form/dl[1]/dd/input")
-            id_input.send_keys("UR_ID")
-
-            # PW 입력
-            pw_input = driver.find_element(By.XPATH, "/html/body/div[2]/div[4]/div[3]/div[4]/div[2]/fieldset/div/form/dl[2]/dd[1]/input")
-            pw_input.send_keys("UR_PW")
-
-            time.sleep(1)
-
-
-            #로그인 버튼 클릭
-            login_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.CSS_SELECTOR, "#loginFrm > a"))
+            region = row["Region"]
+            previous[region] = QuestionRow(
+                region=region,
+                count=int(row["Count"]),
+                title=row.get("Title", ""),
+                detail_url=row.get("DetailUrl", ""),
             )
-            driver.execute_script("arguments[0].scrollIntoView(true);", login_button)
-            time.sleep(0.5)
-            login_button.click()
+    return previous
 
-            time.sleep(1)
-            #2차인증 생년월일 입력
-            extra_input = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.XPATH, "/html/body/div[2]/div[4]/div[4]/div/div/div[2]/div[2]/div[1]/input"))
-            )
-            extra_input.send_keys("UR_PASSCODE")
 
-            confirm_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, '//*[@id="myModal"]/div/div/div[2]/div[2]/div[1]/button'))
-            )
-            confirm_button.click()
+def save_current_rows(rows: Iterable[QuestionRow]) -> None:
+    with open(DATA_FILE, "w", newline="", encoding="utf-8") as file:
+        writer = csv.writer(file)
+        writer.writerow(["Region", "Count", "Title", "DetailUrl"])
+        for row in rows:
+            writer.writerow([row.region, row.count, row.title, row.detail_url])
 
-            time.sleep(1)
 
-            driver.get("https://meister.hrdkorea.or.kr/sub/3/3/7/skillMatchTournament/taskQuestionsList.do")
+def find_increases(
+    previous: Dict[str, QuestionRow], current: List[QuestionRow]
+) -> List[Tuple[QuestionRow, int]]:
+    if previous and all(row.count == 0 for row in previous.values()):
+        print("이전 기준 데이터 형식이 오래되어 현재 크롤링 결과로 기준을 다시 저장합니다.")
+        return []
 
-            #직종 선택란 클릭
-            select_element = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.XPATH, "/html/body/div[2]/div[4]/div[3]/form/div[1]/div/select[2]"))
-            )
-            #IT네트워크시스템
-            option = select_element.find_elements(By.TAG_NAME, "option")[51]
-            option.click()
+    increases: List[Tuple[QuestionRow, int]] = []
+    for row in current:
+        old = previous.get(row.region)
+        if old and row.count > old.count:
+            increases.append((row, old.count))
+        elif previous and not old:
+            increases.append((row, 0))
+    return increases
 
-            #검색 버튼 클릭
-            input_button = WebDriverWait(driver, 10).until(
-                EC.element_to_be_clickable((By.XPATH, "/html/body/div[2]/div[4]/div[3]/form/div[1]/div/div/input[2]"))
-            )
-            input_button.click()
-            
-            time.sleep(1)
 
-            if region == "서울":
-                code = "14047"
-            elif region == "대전":
-                code = "14045"
-            elif region == "충남":
-                code = "14032"
-            elif region == "광주":
-                code = "14018"
-            elif region == "전남":
-                code = "13875"
-            elif region == "경기":
-                code = "13800"
-            elif region == "충북":
-                code = "13759"
-            driver.get(f"https://meister.hrdkorea.or.kr/sub/3/3/7/skillMatchTournament/viewTaskQuestion.do?competCode=2025P00&jobCode=337&subjPrsntSeq={code}")
+def read_new_comments(
+    driver: webdriver.Chrome, wait: WebDriverWait, row: QuestionRow, old_count: int
+) -> str:
+    if not row.detail_url:
+        return "상세 질의 링크를 찾지 못했습니다. 마이스터넷에서 직접 확인해주세요."
 
-            comments = driver.find_elements(By.CLASS_NAME, "comm_view")
+    driver.get(row.detail_url)
+    try:
+        comments = wait.until(
+            EC.presence_of_all_elements_located((By.CLASS_NAME, "comm_view"))
+        )
+    except TimeoutException:
+        return "상세 페이지에서 질의 내용을 찾지 못했습니다. 마이스터넷에서 직접 확인해주세요."
 
-            n = curr_num
-            if len(comments) >= n:
-                nth_comment = comments[n - 1]
-                print(nth_comment.text.strip())
-            else:
-                print(f"{n}번쨰 답 X, 총 댓글 수: {len(comments)}")
+    start = max(old_count, 0)
+    end = min(row.count, len(comments))
+    if start < end:
+        new_comments = [
+            comment.text.strip()
+            for comment in comments[start:end]
+            if comment.text.strip()
+        ]
+        if new_comments:
+            return "\n\n---\n\n".join(new_comments)
 
-            TOKEN='UR_TOKEN'
-            CHANNEL_ID = UR_CHANNEL_ID
+    if len(comments) >= row.count and row.count > 0:
+        latest = comments[row.count - 1].text.strip()
+        if latest:
+            return latest
 
-MAX_FIELD_LENGTH = 1024
+    return f"새 질의 내용을 찾지 못했습니다. 현재 표시된 질의 수: {len(comments)}"
 
-def split_text_into_chunks(text, max_length):
-    """지정된 길이로 텍스트를 나눔"""
-    return [text[i:i+max_length] for i in range(0, len(text), max_length)]
+
+def split_text_into_chunks(text: str, max_length: int) -> List[str]:
+    return [text[i : i + max_length] for i in range(0, len(text), max_length)] or ["내용 없음"]
+
 
 class OneTimeBot(discord.Client):
-    async def on_ready(self):
-        print(f'봇 로그인: {self.user} ({self.user.id})')
-        channel = self.get_channel(CHANNEL_ID)
-        today = datetime.now().strftime("%Y-%m-%d")
-        role_id = UR_ROLE_ID
-        mention = f"<@&{role_id}>"
-        allowed = discord.AllowedMentions(users=True, roles=True)
-        user_id = UR_ID
-        user = f"<@!{user_id}>"
+    def __init__(self, config: Config, row: QuestionRow, old_count: int, comment: str):
+        intents = discord.Intents.default()
+        intents.guilds = True
+        super().__init__(intents=intents)
+        self.config = config
+        self.row = row
+        self.old_count = old_count
+        self.comment = comment
 
+    async def on_ready(self) -> None:
+        print(f"봇 로그인: {self.user} ({self.user.id})")
+        channel = self.get_channel(self.config.discord_channel_id)
         if not channel:
             print("채널을 찾을 수 없습니다.")
             await self.close()
             return
 
-        # 메시지 본문 구성
-        description = f"자동 감지: {region}의 값이 {prev_num}에서 {curr_num}로 증가했습니다. 질의 내용 확인 부탁드립니다."
-        chunks = split_text_into_chunks(nth_comment.text.strip(), MAX_FIELD_LENGTH - 10)  # 여유공간 고려
+        today = datetime.now().strftime("%Y-%m-%d")
+        allowed = discord.AllowedMentions(users=True, roles=True)
+        mentions: List[str] = []
+        if self.config.discord_role_id:
+            mentions.append(f"<@&{self.config.discord_role_id}>")
+        if self.config.discord_user_id:
+            mentions.append(f"<@!{self.config.discord_user_id}>")
 
-        # 첫 번째 Embed 생성
-        embed = discord.Embed(
-            title=f"{user}님, {region}에 새로운 질의가 올라왔습니다. ({today})",
-            description=description,
-            color=0x1abc9c
+        description = (
+            f"자동 감지: {self.row.region}의 질의 수가 "
+            f"{self.old_count}에서 {self.row.count}로 증가했습니다."
         )
+        chunks = split_text_into_chunks(self.comment, MAX_FIELD_LENGTH - 10)
+        title = f"{self.row.region}에 새 질의가 올라왔습니다. ({today})"
+
+        embed = discord.Embed(title=title, description=description, color=0x1ABC9C)
         embed.add_field(name="질의 내용 (1)", value=f"```{chunks[0]}```", inline=False)
+        if self.row.detail_url:
+            embed.add_field(name="상세 링크", value=self.row.detail_url, inline=False)
 
-        await channel.send(content=f"{mention}", embed=embed, allowed_mentions=allowed)
+        await channel.send(
+            content=" ".join(mentions) if mentions else None,
+            embed=embed,
+            allowed_mentions=allowed,
+        )
 
-        # 나머지 부분 추가 전송
-        for i, chunk in enumerate(chunks[1:], start=2):
-            continued_embed = discord.Embed(color=0x1abc9c)
-            continued_embed.add_field(name=f"질의 내용 ({i})", value=f"```{chunk}```", inline=False)
+        for index, chunk in enumerate(chunks[1:], start=2):
+            continued_embed = discord.Embed(color=0x1ABC9C)
+            continued_embed.add_field(
+                name=f"질의 내용 ({index})", value=f"```{chunk}```", inline=False
+            )
             await channel.send(embed=continued_embed)
 
         await self.close()
 
-# 아래는 그대로 유지
-intents = discord.Intents.default()
-intents.guilds = True
 
-async def main():
-    async with OneTimeBot(intents=intents) as bot:
-        await bot.start(TOKEN)
+async def send_discord_alert(
+    config: Config, row: QuestionRow, old_count: int, comment: str
+) -> None:
+    async with OneTimeBot(config, row, old_count, comment) as bot:
+        await bot.start(config.discord_token)
 
-asyncio.run(main())
-if not message_printed and prev_data:
-    print("값의 변화가 없습니다.")
 
-# 현재 데이터 CSV로 저장
-with open(csv_file, "w", newline="", encoding="utf-8") as f:
-    writer = csv.writer(f)
-    writer.writerow(["Region", "Count"])
-    writer.writerows(current_data)
+def ensure_questions_page(
+    driver: webdriver.Chrome, wait: WebDriverWait, config: Config
+) -> None:
+    try:
+        select_job(driver, wait, config.job_name)
+    except Exception:
+        print("로그인 상태를 확인했습니다. 세션이 만료되었거나 접근이 막혀 재로그인합니다.")
+        login(driver, wait, config)
+        select_job(driver, wait, config.job_name)
+
+
+def check_once(config: Config, driver: webdriver.Chrome, wait: WebDriverWait) -> None:
+    ensure_questions_page(driver, wait, config)
+    current_rows = scrape_all_rows(driver, wait)
+    previous_rows = load_previous_rows()
+    increases = find_increases(previous_rows, current_rows)
+
+    if not previous_rows:
+        print("기준 데이터가 없어 현재 데이터를 저장하고 종료합니다.")
+    elif not increases:
+        print("값의 변화가 없습니다.")
+
+    for row, old_count in increases:
+        print(f"{row.title}의 값이 {old_count}에서 {row.count}로 증가했습니다.")
+        comment = read_new_comments(driver, wait, row, old_count)
+        asyncio.run(send_discord_alert(config, row, old_count, comment))
+
+    save_current_rows(current_rows)
+
+
+def main() -> None:
+    driver: Optional[webdriver.Chrome] = None
+    wait: Optional[WebDriverWait] = None
+
+    while True:
+        try:
+            config = load_config()
+            if driver is None:
+                driver = build_driver(config)
+                wait = WebDriverWait(driver, 15)
+            check_once(config, driver, wait)
+        except AlertChannelNotConfigured as exc:
+            print(exc)
+        except WebDriverException as exc:
+            print(f"브라우저 오류가 발생해 다음 주기에 새 브라우저로 재시도합니다: {exc}")
+            if driver:
+                driver.quit()
+            driver = None
+            wait = None
+        except Exception as exc:
+            print(f"실행 중 오류: {exc}")
+
+        interval_seconds = int(os.getenv("CHECK_INTERVAL_SECONDS", "600"))
+        if interval_seconds <= 0:
+            break
+        time.sleep(interval_seconds)
+
+    if driver:
+        driver.quit()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,79 +1,108 @@
-# MeisterNet Discord Bot
+# Meister Cloud Discord Bot
 
-이 프로젝트는 **마이스터넷(https://meister.hrdkorea.or.kr) 사이트에서 IT 네트워크 시스템 직종의 질의 데이터를 자동으로 크롤링하여 Discord 서버에 알림을 보내주는 봇**입니다.  
-또한 간단한 **슬래시 명령어(Slash Command)** 기능도 제공하여, 무작위 지역 추첨이나 봇의 업타임 확인이 가능합니다.
+마이스터넷에서 **클라우드컴퓨팅** 직종의 질의 데이터를 주기적으로 확인하고, 새 질의가 올라오면 Discord 채널로 알림을 보내는 봇입니다.
 
----
-
-![Python Version](https://img.shields.io/badge/Python-3.9%2B-blue?logo=python)
-![License](https://img.shields.io/badge/License-Apache%202.0-green)
+원본 프로젝트: [eunhuit/Meister-Bot](https://github.com/eunhuit/Meister-Bot)
 
 ## 기능
 
-### 1. 데이터 크롤링
-- `selenium`을 이용해 마이스터넷 사이트에 자동 로그인
-- 특정 직종(IT 네트워크 시스템) 질의 게시판에서 데이터를 수집
-- 이전 데이터(`data.csv`)와 비교하여 값 증가 감지
-- 값이 증가하면 해당 질의 내용을 Discord 채널로 전송
+- Selenium으로 마이스터넷 로그인 및 2차 인증 입력
+- `MEISTER_JOB_NAME`에 지정한 직종의 질의 게시판 크롤링
+- 이전 실행 결과와 비교해 질의 수 증가 감지
+- 새 질의 내용을 Discord Embed로 전송
+- `!클컴봇 설정` 명령으로 알림 채널과 선택 역할 멘션 설정
+- Docker Compose 기반 실행
 
-### 2. Discord 알림
-- 값 증가 시, 자동으로 **Discord Embed 메시지** 전송
-- 역할 멘션(@Role) 포함
-- 긴 메시지는 1024자 기준으로 분할 전송
+## Docker 실행
 
-### 3. 슬래시 명령어
-- `/안녕` → 봇이 인사
-- `/1과제`, `/2과제`, `/3과제` → 무작위 시/도 추첨
-- `/업타임` → 봇이 켜져 있는 시간 표시
+기본 실행 방식은 Docker Compose입니다.
 
----
-
-## 📦 설치 및 실행 방법
-
-### 1. 저장소 클론
 ```bash
-git clone https://github.com/your-repo/meisternet-discord-bot.git
-cd meisternet-discord-bot
+cp .env.example .env
+vi .env
+docker compose up -d --build
 ```
 
-### 2. 필요 라이브러리 설치
-```bash
-pip install -r requirements.txt
+Windows PowerShell에서는:
+
+```powershell
+copy .env.example .env
+notepad .env
+docker compose up -d --build
 ```
 
-### 3. ChromeDriver 설치
-./chromedriver-win64/chromedriver.exe 경로에 크롬드라이버를 두어야 합니다.
-[Download](https://storage.googleapis.com/chrome-for-testing-public/139.0.7258.154/win64/chromedriver-win64.zip)
+Compose는 두 서비스를 실행합니다.
 
-### 4. Global 변수 설정
-- `UR_ID` -> 마이스터넷 ID
-- `UR_PW` -> 마이스터넷 PW
-- `UR_PASSCODE` -> 마이스터넷 2차인증 생년월일
-- `UR_TOKEN` -> Discord 봇 토큰
-- `UR_CHANNEL_ID` -> 알림을 보낼 Discord 채널 ID
-- `UR_ROLE_ID` -> 멘션할 Discord 역할 ID
+- `setup-bot`: Discord `!클컴봇 설정` 명령 처리
+- `crawler`: 마이스터넷 질의 크롤링 및 Discord 알림 전송
 
-### 5. 실행
+로그 확인:
+
 ```bash
-run.bat
+docker compose logs -f
 ```
 
-## 프로젝트 구조
+중지:
+
 ```bash
-.
-├── bot.py               # 메인 실행 파일 (크롤링 + Discord 알림)
-├── data.csv             # 이전 데이터 저장 파일
-├── chromedriver-win64/  # 크롬 드라이버 위치
-└── README.md            # 설명 문서
+docker compose down
 ```
 
-## 사용된 기술
-* Python 3.9+
-* Selenium (웹 크롤링)
-* Discord.py (디스코드 봇)
-* CSV (데이터 관리)
-* asyncio (비동기 실행)
+`bot_settings.json`과 `data.csv`는 `bot-data` Docker volume에 저장됩니다.
 
----
+## 설정
 
-Apache 2.0 &copy; [eunhuit](https://www.github.com/eunhuit)
+필수 환경변수:
+
+- `MEISTER_ID`: 마이스터넷 ID
+- `MEISTER_PASSWORD`: 마이스터넷 비밀번호
+- `MEISTER_PASSCODE`: 마이스터넷 2차 인증 입력값
+- `DISCORD_TOKEN`: Discord 봇 토큰
+
+선택 환경변수:
+
+- `DISCORD_CHANNEL_ID`: 봇 명령 대신 직접 지정할 알림 채널 ID
+- `DISCORD_ROLE_ID`: 멘션할 역할 ID
+- `DISCORD_USER_ID`: 함께 멘션할 사용자 ID
+- `MEISTER_JOB_NAME`: 기본값 `클라우드컴퓨팅`
+- `CHECK_INTERVAL_SECONDS`: 확인 주기, 기본값 `600`
+
+## Discord 알림 채널 설정
+
+Discord Developer Portal에서 봇의 **Message Content Intent**를 켜야 `!` 명령어가 동작합니다.
+
+`docker compose up -d --build`로 봇을 실행한 뒤 Discord에서 알림을 받을 채널에 들어가 아래 명령을 실행하세요.
+
+```text
+!클컴봇 설정
+```
+
+역할 멘션도 함께 지정할 수 있습니다.
+
+```text
+!클컴봇 설정 @알림역할
+```
+
+역할은 선택 사항입니다. 비워두면 역할 멘션 없이 알림만 전송합니다. 설정이 끝나면 `bot_settings.json`에 채널 ID와 역할 ID가 저장됩니다. 이후 `crawler` 서비스가 이 설정대로 질의 알림을 보냅니다.
+
+## 한 번만 테스트
+
+`.env`에 아래 값을 넣으면 크롤러가 한 번만 확인하고 종료합니다.
+
+```env
+CHECK_INTERVAL_SECONDS=0
+```
+
+그다음 크롤러만 실행할 수 있습니다.
+
+```bash
+docker compose run --rm crawler
+```
+
+첫 실행 시에는 비교 기준이 없으므로 현재 상태를 `data.csv`에 저장만 합니다. 두 번째 실행부터 새 질의 증가를 감지해 Discord 알림을 보냅니다.
+
+## 문제 해결
+
+`Discord 로그인 실패: DISCORD_TOKEN이 잘못되었거나 재발급이 필요합니다.`가 나오면 Discord Developer Portal에서 봇 토큰을 새로 발급해 `.env`의 `DISCORD_TOKEN`을 교체하세요.
+
+`알림 채널이 설정되지 않았습니다. Discord에서 !클컴봇 설정을 먼저 실행하세요.`가 나오면 `setup-bot`이 정상 로그인된 뒤 Discord 채널에서 `!클컴봇 설정`을 실행하면 됩니다. 설정 전까지 `crawler`는 주기적으로 대기합니다.

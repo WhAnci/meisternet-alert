@@ -1,0 +1,35 @@
+services:
+  setup-bot:
+    build: .
+    env_file:
+      - .env
+    environment:
+      BROWSER: chrome
+      CHROME_BINARY_PATH: /usr/bin/chromium
+      CHROME_DRIVER_PATH: /usr/bin/chromedriver
+      SELENIUM_HEADLESS: "true"
+      DATA_FILE: /data/data.csv
+      BOT_SETTINGS_FILE: /data/bot_settings.json
+    volumes:
+      - bot-data:/data
+    command: ["python", "sub.py"]
+    restart: on-failure
+
+  crawler:
+    build: .
+    env_file:
+      - .env
+    environment:
+      BROWSER: chrome
+      CHROME_BINARY_PATH: /usr/bin/chromium
+      CHROME_DRIVER_PATH: /usr/bin/chromedriver
+      SELENIUM_HEADLESS: "true"
+      DATA_FILE: /data/data.csv
+      BOT_SETTINGS_FILE: /data/bot_settings.json
+    volumes:
+      - bot-data:/data
+    command: ["python", "main.py"]
+    restart: unless-stopped
+
+volumes:
+  bot-data:
