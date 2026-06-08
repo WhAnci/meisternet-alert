@@ -21,37 +21,43 @@ def save_settings(settings: Dict[str, Any]) -> None:
         json.dump(settings, file, ensure_ascii=False, indent=2)
 
 
-def get_alert_channel_id() -> Optional[int]:
-    env_channel_id = os.getenv("DISCORD_CHANNEL_ID")
+def get_alert_channel_id() -> Optional[str]:
+    env_channel_id = os.getenv("SLACK_CHANNEL_ID")
     if env_channel_id:
-        return int(env_channel_id)
+        return env_channel_id
 
-    channel_id = load_settings().get("discord_channel_id")
-    return int(channel_id) if channel_id else None
-
-
-def get_alert_role_id() -> Optional[int]:
-    env_role_id = os.getenv("DISCORD_ROLE_ID")
-    if env_role_id:
-        return int(env_role_id)
-
-    role_id = load_settings().get("discord_role_id")
-    return int(role_id) if role_id else None
-
-
-def set_alert_settings(channel_id: int, role_id: Optional[int] = None) -> None:
     settings = load_settings()
-    settings["discord_channel_id"] = channel_id
-    settings["discord_role_id"] = role_id
+    channel_id = settings.get("alert_channel_id") or settings.get("discord_channel_id")
+    return str(channel_id) if channel_id else None
+
+
+def get_alert_mention() -> Optional[str]:
+    env_mention = os.getenv("SLACK_MENTION")
+    if env_mention:
+        return env_mention
+
+    settings = load_settings()
+    mention = settings.get("alert_mention")
+    return str(mention) if mention else None
+
+
+def set_alert_settings(channel_id: str, mention: Optional[str] = None) -> None:
+    settings = load_settings()
+    settings["alert_channel_id"] = channel_id
+    settings["alert_mention"] = mention
+    settings.pop("discord_channel_id", None)
+    settings.pop("discord_role_id", None)
     save_settings(settings)
 
 
-def set_alert_channel_id(channel_id: int) -> None:
+def set_alert_channel_id(channel_id: str) -> None:
     set_alert_settings(channel_id)
 
 
 def clear_alert_settings() -> None:
     settings = load_settings()
+    settings.pop("alert_channel_id", None)
+    settings.pop("alert_mention", None)
     settings.pop("discord_channel_id", None)
     settings.pop("discord_role_id", None)
     save_settings(settings)

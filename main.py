@@ -1,15 +1,12 @@
-import asyncio
 import csv
 import os
 import re
 import time
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urljoin
 
-import discord
-from bot_settings import append_log, get_alert_channel_id, get_alert_role_id
+from bot_settings import append_log, get_alert_channel_id, get_alert_mention
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.edge.options import Options as EdgeOptions
@@ -19,6 +16,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select, WebDriverWait
+from slack_sdk import WebClient
 
 
 BASE_URL = "https://meister.hrdkorea.or.kr"
@@ -39,10 +37,9 @@ class Config:
     meister_id: str
     meister_password: str
     meister_passcode: str
-    discord_token: str
-    discord_channel_id: int
-    discord_role_id: Optional[int]
-    discord_user_id: Optional[int]
+    slack_bot_token: str
+    slack_channel_id: str
+    slack_mention: Optional[str]
     job_name: str
     interval_seconds: int
     headless: bool
@@ -66,24 +63,18 @@ def required_env(name: str) -> str:
     return value
 
 
-def optional_int_env(name: str) -> Optional[int]:
-    value = os.getenv(name)
-    return int(value) if value else None
-
-
 def load_config() -> Config:
-    discord_channel_id = get_alert_channel_id()
-    if not discord_channel_id:
-        raise AlertChannelNotConfigured("알림 채널이 설정되지 않았습니다. Discord에서 !클컴봇 설정을 먼저 실행하세요.")
+    slack_channel_id = get_alert_channel_id()
+    if not slack_channel_id:
+        raise AlertChannelNotConfigured("알림 채널이 설정되지 않았습니다. Slack에서 /클컴봇 설정을 먼저 실행하세요.")
 
     return Config(
         meister_id=required_env("MEISTER_ID"),
         meister_password=required_env("MEISTER_PASSWORD"),
         meister_passcode=required_env("MEISTER_PASSCODE"),
-        discord_token=required_env("DISCORD_TOKEN"),
-        discord_channel_id=discord_channel_id,
-        discord_role_id=get_alert_role_id(),
-        discord_user_id=optional_int_env("DISCORD_USER_ID"),
+        slack_bot_token=required_env("SLACK_BOT_TOKEN"),
+        slack_channel_id=slack_channel_id,
+        slack_mention=get_alert_mention(),
         job_name=os.getenv("MEISTER_JOB_NAME", "클라우드컴퓨팅"),
         interval_seconds=int(os.getenv("CHECK_INTERVAL_SECONDS", "600")),
         headless=os.getenv("SELENIUM_HEADLESS", "true").lower() != "false",
@@ -389,83 +380,56 @@ def split_text_into_chunks(text: str, max_length: int) -> List[str]:
     return [text[i : i + max_length] for i in range(0, len(text), max_length)] or ["내용 없음"]
 
 
-class OneTimeBot(discord.Client):
-    def __init__(
-        self,
-        config: Config,
-        row: QuestionRow,
-        old_count: int,
-        comment: str,
-        zip_links: List[str],
-    ):
-        intents = discord.Intents.default()
-        intents.guilds = True
-        super().__init__(intents=intents)
-        self.config = config
-        self.row = row
-        self.old_count = old_count
-        self.comment = comment
-        self.zip_links = zip_links
-
-    async def on_ready(self) -> None:
-        print(f"봇 로그인: {self.user} ({self.user.id})")
-        channel = self.get_channel(self.config.discord_channel_id)
-        if not channel:
-            print("채널을 찾을 수 없습니다.")
-            await self.close()
-            return
-
-        today = datetime.now().strftime("%Y-%m-%d")
-        allowed = discord.AllowedMentions(users=True, roles=True)
-        mentions: List[str] = []
-        if self.config.discord_role_id:
-            mentions.append(f"<@&{self.config.discord_role_id}>")
-        if self.config.discord_user_id:
-            mentions.append(f"<@!{self.config.discord_user_id}>")
-
-        description = (
-            f"자동 감지: {self.row.region}의 질의 수가 "
-            f"{self.old_count}에서 {self.row.count}로 증가했습니다."
-        )
-        chunks = split_text_into_chunks(self.comment, MAX_FIELD_LENGTH - 10)
-        title = f"{self.row.region}에 새 질의가 올라왔습니다. ({today})"
-
-        embed = discord.Embed(title=title, description=description, color=0x1ABC9C)
-        embed.add_field(name="질의 내용 (1)", value=f"```{chunks[0]}```", inline=False)
-        if self.zip_links:
-            embed.add_field(
-                name="ZIP 첨부파일",
-                value="\n".join(self.zip_links[:10]),
-                inline=False,
-            )
-        if self.row.detail_url:
-            embed.add_field(name="상세 링크", value=self.row.detail_url, inline=False)
-
-        await channel.send(
-            content=" ".join(mentions) if mentions else None,
-            embed=embed,
-            allowed_mentions=allowed,
-        )
-
-        for index, chunk in enumerate(chunks[1:], start=2):
-            continued_embed = discord.Embed(color=0x1ABC9C)
-            continued_embed.add_field(
-                name=f"질의 내용 ({index})", value=f"```{chunk}```", inline=False
-            )
-            await channel.send(embed=continued_embed)
-
-        await self.close()
+def slack_link(url: str, label: str) -> str:
+    return f"<{url}|{label}>"
 
 
-async def send_discord_alert(
+def send_slack_alert(
     config: Config,
     row: QuestionRow,
     old_count: int,
     comment: str,
     zip_links: List[str],
 ) -> None:
-    async with OneTimeBot(config, row, old_count, comment, zip_links) as bot:
-        await bot.start(config.discord_token)
+    client = WebClient(token=config.slack_bot_token)
+    mention = f"{config.slack_mention}\n" if config.slack_mention else ""
+    header = f"{mention}*{row.region}에 새 질의가 올라왔습니다.*"
+    summary = f"질의 수: `{old_count}` -> `{row.count}`"
+    chunks = split_text_into_chunks(comment, 2800)
+
+    blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": header}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": summary}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"*질의 내용*\n```{chunks[0]}```"}},
+    ]
+
+    link_lines = []
+    if row.detail_url:
+        link_lines.append(slack_link(row.detail_url, "마이스터넷 상세 링크"))
+    for index, link in enumerate(zip_links[:10], start=1):
+        link_lines.append(slack_link(link, f"ZIP 첨부 {index}"))
+    if link_lines:
+        blocks.append(
+            {"type": "section", "text": {"type": "mrkdwn", "text": "*링크*\n" + "\n".join(link_lines)}}
+        )
+
+    client.chat_postMessage(
+        channel=config.slack_channel_id,
+        text=f"{row.region}에 새 질의가 올라왔습니다.",
+        blocks=blocks,
+    )
+
+    for index, chunk in enumerate(chunks[1:], start=2):
+        client.chat_postMessage(
+            channel=config.slack_channel_id,
+            text=f"{row.region} 질의 내용 계속 ({index})",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*질의 내용 계속 ({index})*\n```{chunk}```"},
+                }
+            ],
+        )
 
 
 def ensure_questions_page(
@@ -499,8 +463,8 @@ def check_once(config: Config, driver: webdriver.Chrome, wait: WebDriverWait) ->
         if zip_links:
             print(f"ZIP 첨부파일 {len(zip_links)}개를 찾았습니다.")
             append_log(f"ZIP 첨부파일 감지: {len(zip_links)}개")
-        asyncio.run(send_discord_alert(config, row, old_count, comment, zip_links))
-        append_log(f"Discord 알림 전송 완료: {row.region}")
+        send_slack_alert(config, row, old_count, comment, zip_links)
+        append_log(f"Slack 알림 전송 완료: {row.region}")
 
     save_current_rows(current_rows)
 

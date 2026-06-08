@@ -1,210 +1,160 @@
-import datetime
 import os
-import random
+import re
 
-import discord
-from discord.ext import commands
+from slack_bolt import App
+from slack_bolt.adapter.socket_mode import SocketModeHandler
 
 from bot_settings import (
     append_log,
     clear_alert_settings,
     get_alert_channel_id,
-    get_alert_role_id,
+    get_alert_mention,
     read_recent_logs,
     set_alert_settings,
 )
 
 
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
-start_time = datetime.datetime.utcnow()
-regions = ["광주", "충남", "전남", "대전", "서울", "충북"]
+SLASH_COMMAND = os.getenv("SLACK_SLASH_COMMAND", "/클컴봇")
 
 
-@bot.event
-async def on_ready():
-    print(f"봇 로그인: {bot.user} ({bot.user.id})")
-    append_log(f"설정 봇 로그인: {bot.user}")
+def is_admin(client, user_id: str) -> bool:
+    admin_ids = {
+        user.strip()
+        for user in os.getenv("SLACK_ADMIN_USER_IDS", "").split(",")
+        if user.strip()
+    }
+    if admin_ids:
+        return user_id in admin_ids
+
+    try:
+        profile = client.users_info(user=user_id)["user"]
+        return bool(profile.get("is_admin") or profile.get("is_owner"))
+    except Exception:
+        return False
 
 
-def is_admin(ctx: commands.Context) -> bool:
-    return bool(ctx.guild and ctx.author.guild_permissions.administrator)
+def help_blocks():
+    command = SLASH_COMMAND
+    return [
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": "*클컴봇 명령어*\n마이스터넷 클라우드컴퓨팅 질의 알림을 설정하고 확인합니다.",
+            },
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    "*설정*\n"
+                    f"`{command} 설정` - 현재 채널을 알림 채널로 설정\n"
+                    f"`{command} 설정 @그룹` - 알림 때 멘션할 대상도 함께 저장\n\n"
+                    "*관리*\n"
+                    f"`{command} 상태` - 현재 설정 확인\n"
+                    f"`{command} 최근로그` - 최근 이벤트 로그 확인\n"
+                    f"`{command} 설정해제` - 알림 설정 삭제\n\n"
+                    "*도움*\n"
+                    f"`{command}`, `{command} 도움`"
+                ),
+            },
+        },
+    ]
 
 
-@bot.group(name="클컴봇", invoke_without_command=True)
-async def cloud_bot(ctx: commands.Context):
-    if not is_admin(ctx):
-        return
-    await send_help(ctx)
+def extract_mention(text: str) -> str | None:
+    match = re.search(r"(<(?:@|!subteam\^)[^>]+>)", text)
+    return match.group(1) if match else None
 
 
-async def send_help(ctx: commands.Context):
-    embed = discord.Embed(
-        title="클컴봇 명령어",
-        description=(
-            "마이스터넷 클라우드컴퓨팅 질의 알림을 설정하고 확인합니다.\n"
-            "처음 사용할 때는 알림을 받을 채널에서 `!클컴봇 설정`을 실행하세요."
-        ),
-        color=0x1ABC9C,
-    )
-    embed.set_author(name="클라우드컴퓨팅 질의 알림 봇")
-    embed.add_field(
-        name="설정",
-        value=(
-            "`!클컴봇 설정`\n"
-            "현재 채널을 알림 채널로 설정합니다.\n\n"
-            "`!클컴봇 설정 @역할`\n"
-            "알림 채널을 설정하고 새 질의 알림 때 역할을 멘션합니다."
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="관리",
-        value=(
-            "`!클컴봇 상태`\n"
-            "현재 알림 채널과 멘션 역할을 확인합니다.\n\n"
-            "`!클컴봇 최근로그`\n"
-            "최근 봇 이벤트 로그를 확인합니다.\n\n"
-            "`!클컴봇 설정해제`\n"
-            "알림 채널과 역할 설정을 삭제합니다."
-        ),
-        inline=True,
-    )
-    embed.add_field(
-        name="도움",
-        value=(
-            "`!클컴봇`\n"
-            "도움말을 보여줍니다.\n\n"
-            "`!클컴봇 도움`\n"
-            "도움말을 보여줍니다."
-        ),
-        inline=True,
-    )
-    embed.add_field(
-        name="알림 내용",
-        value="새 질의 내용, 상세 링크, ZIP 첨부 링크가 있으면 함께 전송합니다.",
-        inline=False,
-    )
-    embed.set_footer(text="명령어가 반응하지 않으면 Discord Developer Portal에서 Message Content Intent를 켜주세요.")
-    await ctx.reply(embed=embed)
-
-
-@cloud_bot.command(name="도움")
-async def help_command(ctx: commands.Context):
-    if not is_admin(ctx):
-        return
-    await send_help(ctx)
-
-
-@cloud_bot.command(name="설정")
-async def setup(ctx: commands.Context, role: discord.Role = None):
-    if not is_admin(ctx):
+def command_response(command: str, user_id: str, channel_id: str, client, respond):
+    if not is_admin(client, user_id):
         return
 
-    set_alert_settings(ctx.channel.id, role.id if role else None)
-    append_log(
-        f"알림 설정 변경: channel={ctx.channel.id}, role={role.id if role else 'none'}, user={ctx.author}"
-    )
-
-    lines = [f"알림 채널: {ctx.channel.mention}"]
-    if role:
-        lines.append(f"멘션 역할: {role.mention}")
-    else:
-        lines.append("멘션 역할: 없음")
-
-    await ctx.reply("\n".join(lines))
-
-
-@cloud_bot.command(name="상태")
-async def status(ctx: commands.Context):
-    if not is_admin(ctx):
+    if command in ("", "도움"):
+        respond(blocks=help_blocks(), text="클컴봇 도움말", response_type="ephemeral")
         return
 
-    channel_id = get_alert_channel_id()
-    role_id = get_alert_role_id()
-
-    embed = discord.Embed(title="클컴봇 상태", color=0x1ABC9C)
-    if channel_id:
-        channel = bot.get_channel(channel_id)
-        channel_text = channel.mention if channel else f"`{channel_id}` (채널을 찾을 수 없음)"
-    else:
-        channel_text = "설정되지 않음"
-
-    if role_id:
-        role = ctx.guild.get_role(role_id) if ctx.guild else None
-        role_text = role.mention if role else f"`{role_id}` (역할을 찾을 수 없음)"
-    else:
-        role_text = "없음"
-
-    embed.add_field(name="알림 채널", value=channel_text, inline=False)
-    embed.add_field(name="멘션 역할", value=role_text, inline=False)
-    await ctx.reply(embed=embed)
-
-
-@cloud_bot.command(name="설정해제")
-async def clear_setup(ctx: commands.Context):
-    if not is_admin(ctx):
+    if command.startswith("설정해제"):
+        clear_alert_settings()
+        append_log(f"Slack 알림 설정 삭제: user={user_id}")
+        respond("알림 채널과 멘션 설정을 삭제했습니다.", response_type="ephemeral")
         return
 
-    clear_alert_settings()
-    append_log(f"알림 설정 삭제: user={ctx.author}")
-    await ctx.reply("알림 채널과 멘션 역할 설정을 삭제했습니다.")
-
-
-@cloud_bot.command(name="최근로그")
-async def recent_logs(ctx: commands.Context):
-    if not is_admin(ctx):
+    if command.startswith("상태"):
+        alert_channel = get_alert_channel_id()
+        mention = get_alert_mention()
+        channel_text = f"<#{alert_channel}>" if alert_channel else "설정되지 않음"
+        mention_text = mention or "없음"
+        respond(
+            blocks=[
+                {"type": "section", "text": {"type": "mrkdwn", "text": "*클컴봇 상태*"}},
+                {
+                    "type": "section",
+                    "fields": [
+                        {"type": "mrkdwn", "text": f"*알림 채널*\n{channel_text}"},
+                        {"type": "mrkdwn", "text": f"*멘션 대상*\n{mention_text}"},
+                    ],
+                },
+            ],
+            text="클컴봇 상태",
+            response_type="ephemeral",
+        )
         return
 
-    logs = read_recent_logs(10)
-    embed = discord.Embed(title="클컴봇 최근로그", color=0x1ABC9C)
-    if logs:
-        embed.description = "```text\n" + "\n".join(logs)[-3900:] + "\n```"
-    else:
-        embed.description = "아직 기록된 로그가 없습니다."
-    await ctx.reply(embed=embed)
+    if command.startswith("최근로그"):
+        logs = read_recent_logs(10)
+        body = "\n".join(logs)[-2800:] if logs else "아직 기록된 로그가 없습니다."
+        respond(
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f"*클컴봇 최근로그*\n```{body}```"},
+                }
+            ],
+            text="클컴봇 최근로그",
+            response_type="ephemeral",
+        )
+        return
+
+    if command.startswith("설정"):
+        mention = extract_mention(command)
+        set_alert_settings(channel_id, mention)
+        append_log(f"Slack 알림 설정 변경: channel={channel_id}, mention={mention or 'none'}, user={user_id}")
+        mention_text = mention or "없음"
+        respond(f"알림 채널: <#{channel_id}>\n멘션 대상: {mention_text}", response_type="ephemeral")
+        return
+
+    respond(blocks=help_blocks(), text="클컴봇 도움말", response_type="ephemeral")
 
 
-@bot.command(name="안녕")
-async def hi(ctx: commands.Context):
-    await ctx.reply(f"안녕하세요, {ctx.author.mention}!")
-
-
-@bot.command(name="1과제")
-async def task1(ctx: commands.Context):
-    await ctx.reply(f"1과제 뽑힌 지역은 **{random.choice(regions)}** 입니다!")
-
-
-@bot.command(name="2과제")
-async def task2(ctx: commands.Context):
-    await ctx.reply(f"2과제 뽑힌 지역은 **{random.choice(regions)}** 입니다!")
-
-
-@bot.command(name="3과제")
-async def task3(ctx: commands.Context):
-    await ctx.reply(f"3과제 뽑힌 지역은 **{random.choice(regions)}** 입니다!")
-
-
-@bot.command(name="업타임")
-async def uptime(ctx: commands.Context):
-    now = datetime.datetime.utcnow()
-    delta = now - start_time
-    hours, remainder = divmod(int(delta.total_seconds()), 3600)
-    minutes, seconds = divmod(remainder, 60)
-    await ctx.reply(f"봇 업타임: {hours}시간 {minutes}분 {seconds}초")
+def register_handlers(app: App) -> None:
+    @app.command(SLASH_COMMAND)
+    def handle_cloud_bot_command(ack, body, client, respond):
+        ack()
+        command = (body.get("text") or "").strip()
+        user_id = body.get("user_id")
+        channel_id = body.get("channel_id")
+        if not user_id or not channel_id:
+            return
+        command_response(command, user_id, channel_id, client, respond)
 
 
 def main():
-    token = os.getenv("DISCORD_TOKEN")
-    if not token or token == "your-discord-bot-token":
-        print("DISCORD_TOKEN에 실제 Discord 봇 토큰을 넣어주세요.")
+    bot_token = os.getenv("SLACK_BOT_TOKEN")
+    app_token = os.getenv("SLACK_APP_TOKEN")
+    if not bot_token or bot_token == "xoxb-your-slack-bot-token":
+        print("SLACK_BOT_TOKEN에 실제 Slack Bot User OAuth Token을 넣어주세요.")
+        return
+    if not app_token or app_token == "xapp-your-slack-app-token":
+        print("SLACK_APP_TOKEN에 실제 Slack App-Level Token을 넣어주세요.")
         return
 
-    try:
-        bot.run(token)
-    except discord.LoginFailure:
-        print("Discord 로그인 실패: DISCORD_TOKEN이 잘못되었거나 재발급이 필요합니다.")
+    app = App(token=bot_token)
+    register_handlers(app)
+    append_log("Slack 설정 봇 시작")
+    SocketModeHandler(app, app_token).start()
 
 
 if __name__ == "__main__":
