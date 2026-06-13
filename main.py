@@ -265,16 +265,23 @@ def page_signature(rows: List[QuestionRow]) -> Tuple[Tuple[str, int, str], ...]:
 
 
 def find_numeric_page_link(driver: webdriver.Chrome, page_number: int):
-    for link in driver.find_elements(By.CSS_SELECTOR, "div.paging a"):
+    for link in driver.find_elements(By.CSS_SELECTOR, "div.page a, div.paging a"):
         text = link.text.strip()
         if text.isdigit() and int(text) == page_number:
+            return link
+        onclick = link.get_attribute("onclick") or ""
+        if re.search(rf"\bsetPage\({page_number}\)", onclick):
             return link
     return None
 
 
 def find_next_page_block_link(driver: webdriver.Chrome):
-    for link in driver.find_elements(By.CSS_SELECTOR, "div.paging a"):
-        if "다음" in link.text.strip():
+    for link in driver.find_elements(By.CSS_SELECTOR, "div.page a, div.paging a"):
+        text = link.text.strip()
+        alt = " ".join(
+            image.get_attribute("alt") or "" for image in link.find_elements(By.TAG_NAME, "img")
+        )
+        if "다음" in text or "다음" in alt:
             return link
     return None
 
