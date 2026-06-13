@@ -27,7 +27,7 @@ QUESTIONS_URL = (
     f"{BASE_URL}/sub/3/3/7/skillMatchTournament/taskQuestionsList.do"
 )
 DATA_FILE = os.getenv("DATA_FILE", "data.csv")
-MAX_FIELD_LENGTH = 1024
+MAX_EMBED_COMMENT_LENGTH = 3500
 
 
 class AlertChannelNotConfigured(RuntimeError):
@@ -385,8 +385,33 @@ def read_new_comments(
     return f"새 질의 내용을 찾지 못했습니다. 현재 표시된 질의 수: {len(comments)}", []
 
 
-def split_text_into_chunks(text: str, max_length: int) -> List[str]:
-    return [text[i : i + max_length] for i in range(0, len(text), max_length)] or ["내용 없음"]
+def split_comment_for_alert(text: str) -> Tuple[str, Optional[str]]:
+    cleaned = text.strip() or "내용 없음"
+    if len(cleaned) <= MAX_EMBED_COMMENT_LENGTH:
+        return cleaned, None
+
+    first = cleaned[:MAX_EMBED_COMMENT_LENGTH].rstrip()
+    remaining = cleaned[MAX_EMBED_COMMENT_LENGTH:].strip()
+    if len(remaining) > MAX_EMBED_COMMENT_LENGTH:
+        remaining = (
+            remaining[: MAX_EMBED_COMMENT_LENGTH - 32].rstrip()
+            + "\n\n... 내용이 더 있어 일부 생략되었습니다."
+        )
+    return first, remaining
+
+
+def escape_code_block(text: str) -> str:
+    return text.replace("```", "`\u200b``")
+
+
+def code_block(text: str) -> str:
+    return f"```text\n{escape_code_block(text)}\n```"
+
+
+def format_link_list(links: List[str], limit: int = 5) -> str:
+    shown_links = links[:limit]
+    suffix = f"\n외 {len(links) - limit}개" if len(links) > limit else ""
+    return "\n".join(shown_links) + suffix
 
 
 class OneTimeBot(discord.Client):
@@ -415,7 +440,7 @@ class OneTimeBot(discord.Client):
             await self.close()
             return
 
-        today = datetime.now().strftime("%Y-%m-%d")
+        checked_at = datetime.now().strftime("%Y-%m-%d %H:%M")
         allowed = discord.AllowedMentions(users=True, roles=True)
         mentions: List[str] = []
         if self.config.discord_role_id:
@@ -423,23 +448,26 @@ class OneTimeBot(discord.Client):
         if self.config.discord_user_id:
             mentions.append(f"<@!{self.config.discord_user_id}>")
 
+        first_comment, remaining_comment = split_comment_for_alert(self.comment)
+        title = f"{self.row.region} 새 질의 알림"
         description = (
-            f"자동 감지: {self.row.region}의 질의 수가 "
-            f"{self.old_count}에서 {self.row.count}로 증가했습니다."
+            f"질의 수가 **{self.old_count}개 -> {self.row.count}개**로 증가했습니다.\n\n"
+            f"{code_block(first_comment)}"
         )
-        chunks = split_text_into_chunks(self.comment, MAX_FIELD_LENGTH - 10)
-        title = f"{self.row.region}에 새 질의가 올라왔습니다. ({today})"
 
         embed = discord.Embed(title=title, description=description, color=0x1ABC9C)
-        embed.add_field(name="질의 내용 (1)", value=f"```{chunks[0]}```", inline=False)
+        embed.add_field(name="직종", value=self.config.job_name, inline=True)
+        embed.add_field(name="지역", value=self.row.region, inline=True)
+        embed.add_field(name="확인 시간", value=checked_at, inline=True)
         if self.zip_links:
             embed.add_field(
                 name="ZIP 첨부파일",
-                value="\n".join(self.zip_links[:10]),
+                value=format_link_list(self.zip_links),
                 inline=False,
             )
         if self.row.detail_url:
             embed.add_field(name="상세 링크", value=self.row.detail_url, inline=False)
+        embed.set_footer(text="마이스터넷 질의 게시판 자동 감지")
 
         await channel.send(
             content=" ".join(mentions) if mentions else None,
@@ -447,11 +475,13 @@ class OneTimeBot(discord.Client):
             allowed_mentions=allowed,
         )
 
-        for index, chunk in enumerate(chunks[1:], start=2):
-            continued_embed = discord.Embed(color=0x1ABC9C)
-            continued_embed.add_field(
-                name=f"질의 내용 ({index})", value=f"```{chunk}```", inline=False
+        if remaining_comment:
+            continued_embed = discord.Embed(
+                title=f"{self.row.region} 질의 내용 계속",
+                description=code_block(remaining_comment),
+                color=0x1ABC9C,
             )
+            continued_embed.set_footer(text="앞 알림의 이어지는 내용입니다.")
             await channel.send(embed=continued_embed)
 
         await self.close()
