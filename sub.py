@@ -1,3 +1,4 @@
+import csv
 import datetime
 import os
 import random
@@ -20,6 +21,7 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 start_time = datetime.datetime.utcnow()
 regions = ["광주", "충남", "전남", "대전", "서울", "충북"]
+DATA_FILE = os.getenv("DATA_FILE", "data.csv")
 
 
 @bot.event
@@ -30,6 +32,21 @@ async def on_ready():
 
 def is_admin(ctx: commands.Context) -> bool:
     return bool(ctx.guild and ctx.author.guild_permissions.administrator)
+
+
+def read_question_counts() -> list[tuple[str, int]]:
+    if not os.path.exists(DATA_FILE):
+        return []
+
+    counts: list[tuple[str, int]] = []
+    with open(DATA_FILE, newline="", encoding="utf-8") as file:
+        reader = csv.DictReader(file)
+        for row in reader:
+            region = row.get("Region", "").strip()
+            count = row.get("Count", "").strip()
+            if region and count.isdigit():
+                counts.append((region, int(count)))
+    return counts
 
 
 @bot.group(name="클컴봇", invoke_without_command=True)
@@ -64,6 +81,8 @@ async def send_help(ctx: commands.Context):
         value=(
             "`!클컴봇 상태`\n"
             "현재 알림 채널과 멘션 역할을 확인합니다.\n\n"
+            "`!클컴봇 질의수`\n"
+            "현재 저장된 지역별 질의 수를 확인합니다.\n\n"
             "`!클컴봇 최근로그`\n"
             "최근 봇 이벤트 로그를 확인합니다.\n\n"
             "`!클컴봇 설정해제`\n"
@@ -163,6 +182,24 @@ async def recent_logs(ctx: commands.Context):
         embed.description = "```text\n" + "\n".join(logs)[-3900:] + "\n```"
     else:
         embed.description = "아직 기록된 로그가 없습니다."
+    await ctx.reply(embed=embed)
+
+
+@cloud_bot.command(name="질의수")
+async def question_counts(ctx: commands.Context):
+    if not is_admin(ctx):
+        return
+
+    counts = read_question_counts()
+    embed = discord.Embed(title="현재 질의 수", color=0x1ABC9C)
+    if not counts:
+        embed.description = "아직 저장된 질의 수가 없습니다. 크롤러가 한 번 실행된 뒤 다시 확인해주세요."
+    else:
+        total = sum(count for _, count in counts)
+        embed.description = "\n".join(
+            f"**{region}**: {count}개" for region, count in counts
+        )
+        embed.set_footer(text=f"총 {total}개")
     await ctx.reply(embed=embed)
 
 
