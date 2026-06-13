@@ -279,6 +279,23 @@ def find_next_page_block_link(driver: webdriver.Chrome):
     return None
 
 
+def get_questions_table_text(driver: webdriver.Chrome) -> str:
+    table_body = driver.find_element(
+        By.XPATH, "/html/body/div[2]/div[4]/div[3]/form/div[1]/table/tbody"
+    )
+    return table_body.get_attribute("innerText").strip()
+
+
+def click_paging_link(
+    driver: webdriver.Chrome, wait: WebDriverWait, link, previous_table_text: str
+) -> None:
+    driver.execute_script("arguments[0].click();", link)
+    try:
+        wait.until(lambda current_driver: get_questions_table_text(current_driver) != previous_table_text)
+    except TimeoutException:
+        time.sleep(1)
+
+
 def scrape_all_rows(driver: webdriver.Chrome, wait: WebDriverWait) -> List[QuestionRow]:
     result: List[QuestionRow] = []
     seen_pages: Set[Tuple[Tuple[str, int, str], ...]] = set()
@@ -300,8 +317,7 @@ def scrape_all_rows(driver: webdriver.Chrome, wait: WebDriverWait) -> List[Quest
         if not next_page:
             break
 
-        driver.execute_script("arguments[0].click();", next_page)
-        time.sleep(1)
+        click_paging_link(driver, wait, next_page, get_questions_table_text(driver))
 
     return result
 
