@@ -508,9 +508,21 @@ def ensure_questions_page(
         select_job(driver, wait, config.job_name)
 
 
-def check_once(config: Config, driver: webdriver.Chrome, wait: WebDriverWait) -> None:
+def check_once(
+    config: Config,
+    driver: webdriver.Chrome,
+    wait: WebDriverWait,
+    refresh_baseline: bool = False,
+) -> None:
     ensure_questions_page(driver, wait, config)
     current_rows = scrape_all_rows(driver, wait)
+
+    if refresh_baseline:
+        save_current_rows(current_rows)
+        print("앱 시작 기준으로 현재 질의 개수를 새로 저장했습니다.")
+        append_log("앱 시작 기준 데이터 갱신")
+        return
+
     previous_rows = load_previous_rows()
     increases = find_increases(previous_rows, current_rows)
 
@@ -536,6 +548,7 @@ def check_once(config: Config, driver: webdriver.Chrome, wait: WebDriverWait) ->
 def main() -> None:
     driver: Optional[webdriver.Chrome] = None
     wait: Optional[WebDriverWait] = None
+    refresh_baseline_on_start = True
 
     while True:
         try:
@@ -543,7 +556,8 @@ def main() -> None:
             if driver is None:
                 driver = build_driver(config)
                 wait = WebDriverWait(driver, 15)
-            check_once(config, driver, wait)
+            check_once(config, driver, wait, refresh_baseline_on_start)
+            refresh_baseline_on_start = False
         except AlertChannelNotConfigured as exc:
             print(exc)
         except WebDriverException as exc:
