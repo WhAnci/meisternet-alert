@@ -4,7 +4,6 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urljoin
 
@@ -408,10 +407,18 @@ def code_block(text: str) -> str:
     return f"```text\n{escape_code_block(text)}\n```"
 
 
-def format_link_list(links: List[str], limit: int = 5) -> str:
-    shown_links = links[:limit]
-    suffix = f"\n외 {len(links) - limit}개" if len(links) > limit else ""
-    return "\n".join(shown_links) + suffix
+def format_alert_links(detail_url: str, zip_links: List[str], limit: int = 5) -> Optional[str]:
+    lines: List[str] = []
+    if detail_url:
+        lines.append(f"[상세 링크]({detail_url})")
+
+    for link in zip_links[:limit]:
+        lines.append(f"[다운로드]({link})")
+
+    if len(zip_links) > limit:
+        lines.append(f"외 ZIP 첨부파일 {len(zip_links) - limit}개")
+
+    return "\n".join(lines) if lines else None
 
 
 class OneTimeBot(discord.Client):
@@ -440,7 +447,6 @@ class OneTimeBot(discord.Client):
             await self.close()
             return
 
-        checked_at = datetime.now().strftime("%Y-%m-%d %H:%M")
         allowed = discord.AllowedMentions(users=True, roles=True)
         mentions: List[str] = []
         if self.config.discord_role_id:
@@ -456,17 +462,9 @@ class OneTimeBot(discord.Client):
         )
 
         embed = discord.Embed(title=title, description=description, color=0x1ABC9C)
-        embed.add_field(name="직종", value=self.config.job_name, inline=True)
-        embed.add_field(name="지역", value=self.row.region, inline=True)
-        embed.add_field(name="확인 시간", value=checked_at, inline=True)
-        if self.zip_links:
-            embed.add_field(
-                name="ZIP 첨부파일",
-                value=format_link_list(self.zip_links),
-                inline=False,
-            )
-        if self.row.detail_url:
-            embed.add_field(name="상세 링크", value=self.row.detail_url, inline=False)
+        alert_links = format_alert_links(self.row.detail_url, self.zip_links)
+        if alert_links:
+            embed.add_field(name="링크", value=alert_links, inline=False)
         embed.set_footer(text="마이스터넷 질의 게시판 자동 감지")
 
         await channel.send(
