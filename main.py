@@ -260,31 +260,48 @@ def parse_question_rows(driver: webdriver.Chrome, wait: WebDriverWait) -> List[Q
     return parsed
 
 
+def page_signature(rows: List[QuestionRow]) -> Tuple[Tuple[str, int, str], ...]:
+    return tuple((row.region, row.count, row.detail_url) for row in rows)
+
+
+def find_numeric_page_link(driver: webdriver.Chrome, page_number: int):
+    for link in driver.find_elements(By.CSS_SELECTOR, "div.paging a"):
+        text = link.text.strip()
+        if text.isdigit() and int(text) == page_number:
+            return link
+    return None
+
+
+def find_next_page_block_link(driver: webdriver.Chrome):
+    for link in driver.find_elements(By.CSS_SELECTOR, "div.paging a"):
+        if "다음" in link.text.strip():
+            return link
+    return None
+
+
 def scrape_all_rows(driver: webdriver.Chrome, wait: WebDriverWait) -> List[QuestionRow]:
-    result = parse_question_rows(driver, wait)
+    result: List[QuestionRow] = []
+    seen_pages: Set[Tuple[Tuple[str, int, str], ...]] = set()
+    next_page_number = 1
 
     while True:
-        paging_links = driver.find_elements(By.CSS_SELECTOR, "div.paging a")
-        try:
-            active = driver.find_element(By.CSS_SELECTOR, "div.paging a.active")
-            current_page = int(active.text) if active.text.isdigit() else 1
-        except Exception:
-            current_page = 1
+        rows = parse_question_rows(driver, wait)
+        signature = page_signature(rows)
+        if signature in seen_pages:
+            break
 
-        next_page = None
-        for link in paging_links:
-            if link.text.isdigit() and int(link.text) == current_page + 1:
-                next_page = link
-                break
+        seen_pages.add(signature)
+        result.extend(rows)
+        next_page_number += 1
 
+        next_page = find_numeric_page_link(driver, next_page_number)
         if not next_page:
-            next_page = next((link for link in paging_links if "다음" in link.text), None)
+            next_page = find_next_page_block_link(driver)
         if not next_page:
             break
 
         driver.execute_script("arguments[0].click();", next_page)
         time.sleep(1)
-        result.extend(parse_question_rows(driver, wait))
 
     return result
 
