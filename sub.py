@@ -1,7 +1,5 @@
 import csv
-import datetime
 import os
-import random
 
 import discord
 from discord.ext import commands
@@ -18,9 +16,7 @@ from bot_settings import (
 
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
-start_time = datetime.datetime.utcnow()
-regions = ["광주", "충남", "전남", "대전", "서울", "충북"]
+bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 DATA_FILE = os.getenv("DATA_FILE", "data.csv")
 
 
@@ -28,6 +24,26 @@ DATA_FILE = os.getenv("DATA_FILE", "data.csv")
 async def on_ready():
     print(f"봇 로그인: {bot.user} ({bot.user.id})")
     append_log(f"설정 봇 로그인: {bot.user}")
+
+
+@bot.event
+async def on_command_error(ctx: commands.Context, error: commands.CommandError):
+    if isinstance(error, commands.CommandNotFound):
+        return
+
+    if isinstance(error, commands.RoleNotFound) and ctx.command == setup:
+        await ctx.reply("멘션 역할은 Discord 역할만 사용할 수 있습니다. 예: `!클컴봇 설정 @알림역할`")
+        return
+
+    raise error
+
+
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: discord.app_commands.AppCommandError):
+    if isinstance(error, discord.app_commands.CommandNotFound):
+        return
+
+    raise error
 
 
 def is_admin(ctx: commands.Context) -> bool:
@@ -201,35 +217,6 @@ async def question_counts(ctx: commands.Context):
         )
         embed.set_footer(text=f"총 {total}개")
     await ctx.reply(embed=embed)
-
-
-@bot.command(name="안녕")
-async def hi(ctx: commands.Context):
-    await ctx.reply(f"안녕하세요, {ctx.author.mention}!")
-
-
-@bot.command(name="1과제")
-async def task1(ctx: commands.Context):
-    await ctx.reply(f"1과제 뽑힌 지역은 **{random.choice(regions)}** 입니다!")
-
-
-@bot.command(name="2과제")
-async def task2(ctx: commands.Context):
-    await ctx.reply(f"2과제 뽑힌 지역은 **{random.choice(regions)}** 입니다!")
-
-
-@bot.command(name="3과제")
-async def task3(ctx: commands.Context):
-    await ctx.reply(f"3과제 뽑힌 지역은 **{random.choice(regions)}** 입니다!")
-
-
-@bot.command(name="업타임")
-async def uptime(ctx: commands.Context):
-    now = datetime.datetime.utcnow()
-    delta = now - start_time
-    hours, remainder = divmod(int(delta.total_seconds()), 3600)
-    minutes, seconds = divmod(remainder, 60)
-    await ctx.reply(f"봇 업타임: {hours}시간 {minutes}분 {seconds}초")
 
 
 def main():
