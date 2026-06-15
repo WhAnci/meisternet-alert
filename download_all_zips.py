@@ -64,6 +64,10 @@ def safe_filename(value: str) -> str:
     return filename if filename.lower().endswith(".zip") else f"{filename}.zip"
 
 
+def task_directory_name(row: QuestionRow) -> str:
+    return safe_filename(row.region).removesuffix(".zip")
+
+
 def unique_path(directory: Path, filename: str) -> Path:
     candidate = directory / filename
     if not candidate.exists():
@@ -173,13 +177,17 @@ def main() -> None:
         ensure_questions_page(driver, wait, config)
         rows = scrape_all_rows(driver, wait)
         print(f"[INFO] 과제 {len(rows)}개 조회 완료")
+        for row in rows:
+            (download_dir / task_directory_name(row)).mkdir(parents=True, exist_ok=True)
 
         zip_links = collect_all_zip_links(driver, wait, rows)
         print(f"[INFO] ZIP 링크 {len(zip_links)}개 발견")
 
         session = make_session_from_driver(driver)
         for index, (row, link) in enumerate(zip_links, start=1):
-            path = download_zip(session, link, download_dir)
+            task_dir = download_dir / task_directory_name(row)
+            task_dir.mkdir(parents=True, exist_ok=True)
+            path = download_zip(session, link, task_dir)
             print(f"[{index}/{len(zip_links)}] {row.region}: {path}")
     finally:
         driver.quit()
