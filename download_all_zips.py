@@ -2,11 +2,12 @@ import argparse
 import os
 import re
 from pathlib import Path
-from typing import Iterable, List, Set, Tuple
+from dataclasses import dataclass
+from typing import Iterable, List, Set
 from urllib.parse import unquote, urlparse
 
 import requests
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import TimeoutException, UnexpectedAlertPresentException
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 
@@ -24,6 +25,13 @@ from main import (
 
 DEFAULT_DOWNLOAD_DIR = r"C:\Users\competitor\Documents\tmp\worldskills-tmp"
 REQUEST_TIMEOUT_SECONDS = 60
+
+
+@dataclass(frozen=True)
+class ZipAttachment:
+    row: QuestionRow
+    url: str
+    uploaded_at: str
 
 
 def load_env_file(path: str = ".env") -> None:
@@ -68,6 +76,17 @@ def task_directory_name(row: QuestionRow) -> str:
     return safe_filename(row.region).removesuffix(".zip")
 
 
+def filename_timestamp(value: str) -> str:
+    match = re.search(
+        r"(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})",
+        value,
+    )
+    if not match:
+        return "unknown_time"
+    year, month, day, hour, minute, second = match.groups()
+    return f"{year}{month}{day}_{hour}{minute}{second}"
+
+
 def unique_path(directory: Path, filename: str) -> Path:
     candidate = directory / filename
     if not candidate.exists():
@@ -83,10 +102,38 @@ def unique_path(directory: Path, filename: str) -> Path:
         index += 1
 
 
-def collect_all_zip_links(
-    driver, wait: WebDriverWait, rows: Iterable[QuestionRow]
-) -> List[Tuple[QuestionRow, str]]:
-    found: List[Tuple[QuestionRow, str]] = []
+def extract_comment_timestamp(comment) -> str:
+    timestamps = comment.find_elements(By.CSS_SELECTOR, "span.point01")
+    if not timestamps:
+        return ""
+    return timestamps[0].get_attribute("innerText").strip()
+
+
+def open_detail_page(driver, wait: WebDriverWait, config: Config, row: QuestionRow) -> bool:
+    for attempt in range(2):
+        try:
+            driver.get(row.detail_url)
+            wait.until(lambda current_driver: current_driver.find_elements(By.CLASS_NAME, "comm_view"))
+            return True
+        except UnexpectedAlertPresentException:
+            try:
+                driver.switch_to.alert.accept()
+            except Exception:
+                pass
+        except TimeoutException:
+            if attempt == 1:
+                return False
+
+        print(f"[RETRY] {row.region}: 세션 확인 후 상세 페이지 재시도")
+        ensure_questions_page(driver, wait, config)
+
+    return False
+
+
+def collect_all_zip_attachments(
+    driver, wait: WebDriverWait, config: Config, rows: Iterable[QuestionRow]
+) -> List[ZipAttachment]:
+    found: List[ZipAttachment] = []
     seen_links: Set[str] = set()
 
     for row in rows:
@@ -94,22 +141,19 @@ def collect_all_zip_links(
             print(f"[SKIP] {row.region}: 상세 링크 없음")
             continue
 
-        driver.get(row.detail_url)
-        try:
-            comments = wait.until(
-                lambda current_driver: current_driver.find_elements(By.CLASS_NAME, "comm_view")
-            )
-        except TimeoutException:
+        if not open_detail_page(driver, wait, config, row):
             print(f"[SKIP] {row.region}: 질의 댓글 영역을 찾지 못함")
             continue
+        comments = driver.find_elements(By.CLASS_NAME, "comm_view")
 
         row_count = 0
         for comment in comments:
+            uploaded_at = extract_comment_timestamp(comment)
             for link in collect_zip_links_from_element(comment):
                 if link in seen_links:
                     continue
                 seen_links.add(link)
-                found.append((row, link))
+                found.append(ZipAttachment(row=row, url=link, uploaded_at=uploaded_at))
                 row_count += 1
 
         print(f"[SCAN] {row.region}: ZIP {row_count}개")
@@ -135,7 +179,8 @@ def make_session_from_driver(driver) -> requests.Session:
     return session
 
 
-def download_zip(session: requests.Session, url: str, directory: Path) -> Path:
+def download_zip(session: requests.Session, attachment: ZipAttachment, directory: Path) -> Path:
+    url = attachment.url
     response = session.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
     response.raise_for_status()
 
@@ -146,6 +191,7 @@ def download_zip(session: requests.Session, url: str, directory: Path) -> Path:
     else:
         filename = safe_filename(urlparse(url).path)
 
+    filename = f"{filename_timestamp(attachment.uploaded_at)}__{filename}"
     path = unique_path(directory, filename)
     path.write_bytes(response.content)
     return path
@@ -180,15 +226,15 @@ def main() -> None:
         for row in rows:
             (download_dir / task_directory_name(row)).mkdir(parents=True, exist_ok=True)
 
-        zip_links = collect_all_zip_links(driver, wait, rows)
-        print(f"[INFO] ZIP 링크 {len(zip_links)}개 발견")
+        zip_attachments = collect_all_zip_attachments(driver, wait, config, rows)
+        print(f"[INFO] ZIP 링크 {len(zip_attachments)}개 발견")
 
         session = make_session_from_driver(driver)
-        for index, (row, link) in enumerate(zip_links, start=1):
-            task_dir = download_dir / task_directory_name(row)
+        for index, attachment in enumerate(zip_attachments, start=1):
+            task_dir = download_dir / task_directory_name(attachment.row)
             task_dir.mkdir(parents=True, exist_ok=True)
-            path = download_zip(session, link, task_dir)
-            print(f"[{index}/{len(zip_links)}] {row.region}: {path}")
+            path = download_zip(session, attachment, task_dir)
+            print(f"[{index}/{len(zip_attachments)}] {attachment.row.region}: {path}")
     finally:
         driver.quit()
 
