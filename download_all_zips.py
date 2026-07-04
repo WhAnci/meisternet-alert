@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Iterable, List, Set
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
 from selenium.common.exceptions import TimeoutException, UnexpectedAlertPresentException
@@ -77,13 +77,20 @@ def task_directory_name(row: QuestionRow) -> str:
 
 
 def filename_timestamp(value: str) -> str:
+    normalized_match = re.search(r"(\d{8})_(\d{6})", value)
+    if normalized_match:
+        date, time = normalized_match.groups()
+        return f"{date}_{time}"
+
     match = re.search(
         r"(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2}):(\d{2})",
         value,
     )
     if not match:
+        match = re.search(r"(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})", value)
+    if not match:
         return "unknown_time"
-    year, month, day, hour, minute, second = match.groups()
+    year, month, day, hour, minute, second = match.groups()[:6]
     return f"{year}{month}{day}_{hour}{minute}{second}"
 
 
@@ -107,6 +114,42 @@ def extract_comment_timestamp(comment) -> str:
     if not timestamps:
         return ""
     return timestamps[0].get_attribute("innerText").strip()
+
+
+def timestamp_from_download_url(url: str) -> str:
+    parsed = urlparse(url)
+    file_rename = parse_qs(parsed.query).get("fileRename", [""])[0]
+    return filename_timestamp(file_rename)
+
+
+def is_inside_comment(anchor) -> bool:
+    return bool(
+        anchor.find_elements(
+            By.XPATH,
+            "./ancestor::*[contains(concat(' ', normalize-space(@class), ' '), ' comm_view ')]",
+        )
+    )
+
+
+def collect_original_zip_attachments(driver, row: QuestionRow) -> List[ZipAttachment]:
+    found: List[ZipAttachment] = []
+    for anchor in driver.find_elements(By.TAG_NAME, "a"):
+        if is_inside_comment(anchor):
+            continue
+
+        href = anchor.get_attribute("href") or ""
+        text = anchor.get_attribute("innerText") or ""
+        if ".zip" not in href.lower() and ".zip" not in text.lower():
+            continue
+
+        found.append(
+            ZipAttachment(
+                row=row,
+                url=urlparse(href).geturl(),
+                uploaded_at=timestamp_from_download_url(href),
+            )
+        )
+    return found
 
 
 def open_detail_page(driver, wait: WebDriverWait, config: Config, row: QuestionRow) -> bool:
@@ -144,9 +187,15 @@ def collect_all_zip_attachments(
         if not open_detail_page(driver, wait, config, row):
             print(f"[SKIP] {row.region}: 질의 댓글 영역을 찾지 못함")
             continue
+        row_count = 0
+        for attachment in collect_original_zip_attachments(driver, row):
+            if attachment.url in seen_links:
+                continue
+            seen_links.add(attachment.url)
+            found.append(attachment)
+            row_count += 1
         comments = driver.find_elements(By.CLASS_NAME, "comm_view")
 
-        row_count = 0
         for comment in comments:
             uploaded_at = extract_comment_timestamp(comment)
             for link in collect_zip_links_from_element(comment):
