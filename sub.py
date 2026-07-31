@@ -25,12 +25,16 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 MAX_SUMMARY_SOURCE_LENGTH = 12000
 MAX_DISCORD_MESSAGE_LENGTH = 2000
 _tree_synced = False
+_view_registered = False
 
 
 @bot.event
 async def on_ready():
-    global _tree_synced
+    global _tree_synced, _view_registered
     print(f"봇 로그인: {bot.user} ({bot.user.id})")
+    if not _view_registered:
+        bot.add_view(SummaryButtonView())
+        _view_registered = True
     if not _tree_synced:
         await bot.tree.sync()
         _tree_synced = True
@@ -132,10 +136,6 @@ class SummaryButtonView(discord.ui.View):
             summary = summary[: MAX_DISCORD_MESSAGE_LENGTH - 20].rstrip() + "\n...(생략)"
         await interaction.followup.send(summary, ephemeral=True)
         append_log(f"Gemini 요약 완료(버튼): user={interaction.user}")
-
-
-# 봇 재시작 후에도 알림 메시지의 버튼을 계속 처리하도록 영구 뷰로 등록합니다.
-bot.add_view(SummaryButtonView())
 
 
 @bot.tree.command(name="요약", description="입력한 내용을 Gemini로 요약합니다.")
