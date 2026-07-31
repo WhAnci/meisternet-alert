@@ -24,11 +24,17 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 MAX_SUMMARY_SOURCE_LENGTH = 12000
 MAX_DISCORD_MESSAGE_LENGTH = 2000
+_tree_synced = False
 
 
 @bot.event
 async def on_ready():
+    global _tree_synced
     print(f"봇 로그인: {bot.user} ({bot.user.id})")
+    if not _tree_synced:
+        await bot.tree.sync()
+        _tree_synced = True
+        print("슬래시 명령어 동기화 완료")
     append_log(f"설정 봇 로그인: {bot.user}")
 
 
@@ -91,6 +97,69 @@ def request_gemini_summary(source: str) -> str:
     return summary
 
 
+class SummaryButtonView(discord.ui.View):
+    """알림 메시지의 요약 버튼. 클릭한 사용자에게만 보이는 ephemeral 응답으로 전송합니다."""
+
+    def __init__(self) -> None:
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="요약", style=discord.ButtonStyle.primary, custom_id="meister_summary"
+    )
+    async def summary_button(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        message = interaction.message
+        if not message:
+            await interaction.followup.send("요약할 메시지를 찾을 수 없습니다.", ephemeral=True)
+            return
+
+        source = message_text_for_summary(message)
+        if not source:
+            await interaction.followup.send("요약할 내용이 없는 메시지입니다.", ephemeral=True)
+            return
+
+        try:
+            summary = await asyncio.to_thread(request_gemini_summary, source)
+        except (requests.RequestException, RuntimeError) as exc:
+            append_log(f"Gemini 요약 실패: {exc}")
+            await interaction.followup.send(f"요약에 실패했습니다: {exc}", ephemeral=True)
+            return
+
+        if len(summary) > MAX_DISCORD_MESSAGE_LENGTH:
+            summary = summary[: MAX_DISCORD_MESSAGE_LENGTH - 20].rstrip() + "\n...(생략)"
+        await interaction.followup.send(summary, ephemeral=True)
+        append_log(f"Gemini 요약 완료(버튼): user={interaction.user}")
+
+
+# 봇 재시작 후에도 알림 메시지의 버튼을 계속 처리하도록 영구 뷰로 등록합니다.
+bot.add_view(SummaryButtonView())
+
+
+@bot.tree.command(name="요약", description="입력한 내용을 Gemini로 요약합니다.")
+@discord.app_commands.describe(text="요약할 메시지 내용")
+async def summarize_command(interaction: discord.Interaction, text: str) -> None:
+    await interaction.response.defer(ephemeral=True)
+
+    if not text.strip():
+        await interaction.followup.send("요약할 내용을 입력해주세요.", ephemeral=True)
+        return
+
+    try:
+        summary = await asyncio.to_thread(request_gemini_summary, text)
+    except (requests.RequestException, RuntimeError) as exc:
+        append_log(f"Gemini 요약 실패: {exc}")
+        await interaction.followup.send(f"요약에 실패했습니다: {exc}", ephemeral=True)
+        return
+
+    if len(summary) > MAX_DISCORD_MESSAGE_LENGTH:
+        summary = summary[: MAX_DISCORD_MESSAGE_LENGTH - 20].rstrip() + "\n...(생략)"
+    await interaction.followup.send(summary, ephemeral=True)
+    append_log(f"Gemini 요약 완료(슬래시 명령어): user={interaction.user}")
+
+
 async def summarize_replied_message(message: discord.Message) -> None:
     if message.content.strip() != "요약" or not message.reference:
         return
@@ -124,8 +193,17 @@ async def summarize_replied_message(message: discord.Message) -> None:
 
     if len(summary) > MAX_DISCORD_MESSAGE_LENGTH:
         summary = summary[: MAX_DISCORD_MESSAGE_LENGTH - 20].rstrip() + "\n...(생략)"
-    await message.reply(summary, mention_author=False)
-    append_log(f"Gemini 요약 완료: user={message.author}")
+
+    # 일반 메시지 답장은 ephemeral로 만들 수 없으므로 요청자의 DM으로만 전송합니다.
+    try:
+        await message.author.send(summary)
+    except discord.Forbidden:
+        await message.reply(
+            "요약을 보냈지만 DM을 보낼 수 없습니다. 서버에서 봇의 개인 메시지를 허용해주세요.",
+            mention_author=False,
+        )
+        return
+    append_log(f"Gemini 요약 완료(DM): user={message.author}")
 
 
 @bot.event

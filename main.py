@@ -494,6 +494,15 @@ class OneTimeBot(discord.Client):
         if self.config.discord_user_id:
             mentions.append(f"<@!{self.config.discord_user_id}>")
 
+        summary_view = discord.ui.View(timeout=None)
+        summary_view.add_item(
+            discord.ui.Button(
+                label="요약",
+                style=discord.ButtonStyle.primary,
+                custom_id="meister_summary",
+            )
+        )
+
         first_comment, remaining_comment = split_comment_for_alert(self.comment)
         title = f"{self.row.region} 새 질의 알림"
         description = (
@@ -510,6 +519,7 @@ class OneTimeBot(discord.Client):
         await channel.send(
             content=" ".join(mentions) if mentions else None,
             embed=embed,
+            view=summary_view,
             allowed_mentions=allowed,
         )
 
