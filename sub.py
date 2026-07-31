@@ -1,7 +1,9 @@
 import csv
+import asyncio
 import os
 
 import discord
+import requests
 from discord.ext import commands
 
 from bot_settings import (
@@ -18,12 +20,118 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 DATA_FILE = os.getenv("DATA_FILE", "data.csv")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+MAX_SUMMARY_SOURCE_LENGTH = 12000
+MAX_DISCORD_MESSAGE_LENGTH = 2000
 
 
 @bot.event
 async def on_ready():
     print(f"봇 로그인: {bot.user} ({bot.user.id})")
     append_log(f"설정 봇 로그인: {bot.user}")
+
+
+def message_text_for_summary(message: discord.Message) -> str:
+    """봇 메시지의 일반 텍스트와 embed 내용을 Gemini 입력으로 합칩니다."""
+    parts = []
+    if message.content.strip():
+        parts.append(message.content.strip())
+
+    for embed in message.embeds:
+        if embed.title:
+            parts.append(f"제목: {embed.title}")
+        if embed.description:
+            parts.append(embed.description)
+        for field in embed.fields:
+            parts.append(f"{field.name}: {field.value}")
+        if embed.footer and embed.footer.text:
+            parts.append(f"안내: {embed.footer.text}")
+
+    return "\n\n".join(parts).strip()
+
+
+def request_gemini_summary(source: str) -> str:
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.")
+
+    endpoint = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{GEMINI_MODEL}:generateContent"
+    )
+    prompt = (
+        "다음 Discord 알림 내용을 한국어로 간결하게 요약해 주세요. "
+        "핵심 내용과 필요한 조치가 있다면 포함하고, 링크는 삭제하지 마세요. "
+        "답변은 요약문만 작성하세요.\n\n"
+        f"알림 내용:\n{source[:MAX_SUMMARY_SOURCE_LENGTH]}"
+    )
+    response = requests.post(
+        endpoint,
+        params={"key": GEMINI_API_KEY},
+        json={"contents": [{"parts": [{"text": prompt}]}]},
+        timeout=45,
+    )
+    if not response.ok:
+        try:
+            detail = response.json().get("error", {}).get("message", "알 수 없는 오류")
+        except ValueError:
+            detail = response.text[:200]
+        raise RuntimeError(f"Gemini API 오류: {detail}")
+
+    data = response.json()
+    candidates = data.get("candidates", [])
+    if not candidates:
+        raise RuntimeError("Gemini가 요약을 반환하지 않았습니다.")
+    summary = "".join(
+        part.get("text", "")
+        for part in candidates[0].get("content", {}).get("parts", [])
+    ).strip()
+    if not summary:
+        raise RuntimeError("Gemini가 빈 요약을 반환했습니다.")
+    return summary
+
+
+async def summarize_replied_message(message: discord.Message) -> None:
+    if message.content.strip() != "요약" or not message.reference:
+        return
+    if not bot.user or message.author.bot:
+        return
+
+    referenced = message.reference.resolved
+    if not isinstance(referenced, discord.Message):
+        try:
+            referenced = await message.channel.fetch_message(message.reference.message_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            await message.reply("요약할 원본 메시지를 찾을 수 없습니다.", mention_author=False)
+            return
+
+    # 다른 봇의 메시지나 일반 사용자 메시지를 요약하지 않습니다.
+    if referenced.author.id != bot.user.id:
+        return
+
+    source = message_text_for_summary(referenced)
+    if not source:
+        await message.reply("요약할 내용이 없는 메시지입니다.", mention_author=False)
+        return
+
+    async with message.channel.typing():
+        try:
+            summary = await asyncio.to_thread(request_gemini_summary, source)
+        except (requests.RequestException, RuntimeError) as exc:
+            append_log(f"Gemini 요약 실패: {exc}")
+            await message.reply(f"요약에 실패했습니다: {exc}", mention_author=False)
+            return
+
+    if len(summary) > MAX_DISCORD_MESSAGE_LENGTH:
+        summary = summary[: MAX_DISCORD_MESSAGE_LENGTH - 20].rstrip() + "\n...(생략)"
+    await message.reply(summary, mention_author=False)
+    append_log(f"Gemini 요약 완료: user={message.author}")
+
+
+@bot.event
+async def on_message(message: discord.Message):
+    await summarize_replied_message(message)
+    await bot.process_commands(message)
 
 
 @bot.event

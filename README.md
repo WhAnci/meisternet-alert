@@ -10,6 +10,7 @@
 - `MEISTER_JOB_NAME`에 지정한 직종의 질의 게시판 크롤링
 - 이전 실행 결과와 비교해 질의 수 증가 감지
 - 새 질의 내용을 Discord Embed로 전송
+- 봇 알림 메시지에 답장으로 `요약`을 보내면 Gemini API로 한국어 요약
 - `!클컴봇 설정` 명령으로 알림 채널과 선택 역할 멘션 설정
 - Docker Compose 기반 실행
 
@@ -58,6 +59,7 @@ docker compose down
 - `MEISTER_PASSWORD`: 마이스터넷 비밀번호
 - `MEISTER_PASSCODE`: 마이스터넷 2차 인증 입력값
 - `DISCORD_TOKEN`: Discord 봇 토큰
+- `GEMINI_API_KEY`: Gemini API 키 (`요약` 기능 사용 시 필수)
 
 선택 환경변수:
 
@@ -66,6 +68,7 @@ docker compose down
 - `DISCORD_USER_ID`: 함께 멘션할 사용자 ID
 - `MEISTER_JOB_NAME`: 기본값 `클라우드컴퓨팅`
 - `CHECK_INTERVAL_SECONDS`: 확인 주기, 기본값 `600`
+- `GEMINI_MODEL`: 사용할 Gemini 모델, 기본값 `gemini-2.0-flash`
 
 ## Discord 알림 채널 설정
 
@@ -86,6 +89,14 @@ Discord Developer Portal에서 봇의 **Message Content Intent**를 켜야 `!` �
 역할은 선택 사항입니다. 비워두면 역할 멘션 없이 알림만 전송합니다. 설정이 끝나면 `bot_settings.json`에 채널 ID와 역할 ID가 저장됩니다. 이후 `crawler` 서비스가 이 설정대로 질의 알림을 보냅니다.
 
 `!클컴봇` 계열 명령어는 Discord 서버 관리자만 사용할 수 있습니다. 관리자가 아니면 봇이 응답하지 않습니다.
+
+봇이 보낸 질의 알림 메시지를 Discord에서 **답장**한 뒤 메시지 내용으로 아래처럼 입력하면 됩니다.
+
+```text
+요약
+```
+
+Gemini API 키가 없거나 API 호출에 실패하면 오류 안내를 답장합니다.
 
 ## Discord 명령어
 
