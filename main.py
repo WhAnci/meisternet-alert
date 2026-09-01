@@ -1,3 +1,6 @@
+# Modified from eunhuit/Meister-Bot under the Apache License, Version 2.0.
+# This fork changes crawler configuration, pagination, Discord alerts, and related behavior.
+
 import asyncio
 import csv
 import os

@@ -1,3 +1,6 @@
+# Modified from eunhuit/Meister-Bot under the Apache License, Version 2.0.
+# This fork limits Discord commands to the setup group and adds settings/status helpers.
+
 import csv
 import asyncio
 import os

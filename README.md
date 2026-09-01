@@ -150,3 +150,11 @@ docker compose run --rm crawler
 `알림 채널이 설정되지 않았습니다. Discord에서 !클컴봇 설정을 먼저 실행하세요.`가 나오면 `setup-bot`이 정상 로그인된 뒤 Discord 채널에서 `!클컴봇 설정`을 실행하면 됩니다. 설정 전까지 `crawler`는 주기적으로 대기합니다.
 
 Rocky Linux에서 `deb.debian.org:80` 접속 실패로 `chromium` 설치가 실패하면 최신 `Dockerfile`을 받은 뒤 다시 빌드하세요. 현재 Dockerfile은 Debian apt 저장소를 HTTPS와 IPv4로 사용하도록 설정되어 있습니다.
+
+## 라이선스 및 원본 고지
+
+이 프로젝트는 [eunhuit/Meister-Bot](https://github.com/eunhuit/Meister-Bot)을 포크하여 수정한 파생 저작물입니다.
+
+원본 프로젝트와 이 포크는 Apache License, Version 2.0에 따라 배포됩니다. 전체 라이선스 전문은 [LICENSE](LICENSE)에 포함되어 있으며, 원본 저작권 및 변경 고지는 [NOTICE](NOTICE)를 확인하세요.
+
+이 포크는 원본 대비 클라우드컴퓨팅 직종 기본값, Docker 실행 환경, Discord 설정/상태 명령, 알림 포맷, 페이지네이션 처리, Gemini 요약 기능, ZIP 다운로드 유틸리티 등을 변경하거나 추가했습니다.

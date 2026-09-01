@@ -1,0 +1,19 @@
+Meister Cloud Discord Bot
+
+This project is a fork and derivative work of Meister-Bot:
+https://github.com/eunhuit/Meister-Bot
+
+Original project:
+Copyright eunhuit
+Licensed under the Apache License, Version 2.0.
+
+This fork includes modifications, including but not limited to:
+- Cloud-computing job defaults and configuration updates.
+- Docker and Docker Compose support.
+- File-based Discord alert channel and role settings.
+- Discord command changes for bot setup, status, logs, and question counts.
+- Improved alert formatting and pagination handling.
+- Optional Gemini-based summary features.
+- A separate ZIP downloader utility for MeisterNet task attachments.
+
+The full Apache License, Version 2.0 is included in the LICENSE file.
